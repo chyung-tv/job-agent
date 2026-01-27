@@ -2,12 +2,21 @@
 
 import os
 import sys
+from pathlib import Path
+
+# Add project root to Python path if running directly
+# This allows the script to work both as a module and when run directly
+project_root = Path(__file__).parent.parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
 from src.database.session import Base, engine
-from src.database.models import (  # noqa: F401 - Import to register with Base
+from src.database.models import (
     JobSearch,
     JobPosting,
     MatchedJob,
     UserProfile,
+    CompanyResearch,
 )
 
 
@@ -66,7 +75,7 @@ def create_tables(overwrite: bool = False):
 
 if __name__ == "__main__":
     # Check for --overwrite flag or OVERWRITE_TABLES environment variable
-    overwrite = True
+    overwrite = False
 
     # Check command line arguments
     if "--overwrite" in sys.argv or "-o" in sys.argv:

@@ -4,7 +4,17 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import JSON, Column, DateTime, String, Boolean, ForeignKey, Text, Integer, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Column,
+    DateTime,
+    String,
+    Boolean,
+    ForeignKey,
+    Text,
+    Integer,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -18,12 +28,13 @@ if TYPE_CHECKING:
 
 class JobSearch(Base):
     """Model representing a job search workflow run.
-    
+
     Stores metadata about a complete job search workflow execution,
     including search parameters and summary statistics.
     """
+
     __tablename__ = "job_searches"
-    
+
     # Primary key
     id = Column(
         UUID(as_uuid=True),
@@ -31,7 +42,7 @@ class JobSearch(Base):
         default=uuid.uuid4,
         doc="Unique identifier for the job search workflow",
     )
-    
+
     # Search parameters
     query = Column(
         String(255),
@@ -58,7 +69,7 @@ class JobSearch(Base):
         default="us",
         doc="Country code (e.g., 'us')",
     )
-    
+
     # Results summary
     total_jobs_found = Column(
         Integer,
@@ -75,7 +86,7 @@ class JobSearch(Base):
         default=0,
         doc="Number of jobs that matched the user profile",
     )
-    
+
     # Timestamps
     created_at = Column(
         DateTime,
@@ -90,19 +101,25 @@ class JobSearch(Base):
         nullable=False,
         doc="Timestamp when the search was last updated",
     )
-    
+
     # Relationships
-    job_postings = relationship("JobPosting", back_populates="job_search", cascade="all, delete-orphan")
-    matched_jobs = relationship("MatchedJob", back_populates="job_search", cascade="all, delete-orphan")
-    
+    job_postings = relationship(
+        "JobPosting", back_populates="job_search", cascade="all, delete-orphan"
+    )
+    matched_jobs = relationship(
+        "MatchedJob", back_populates="job_search", cascade="all, delete-orphan"
+    )
+
     @classmethod
-    def from_context(cls, context: "WorkflowContext", total_jobs_found: int = 0) -> "JobSearch":
+    def from_context(
+        cls, context: "WorkflowContext", total_jobs_found: int = 0
+    ) -> "JobSearch":
         """Create a JobSearch instance from WorkflowContext.
-        
+
         Args:
             context: WorkflowContext object containing search parameters
             total_jobs_found: Total number of jobs found (default: 0)
-            
+
         Returns:
             JobSearch instance
         """
@@ -117,13 +134,15 @@ class JobSearch(Base):
         )
 
 
+# I think we need to consider how to handle searched job posting either delete duplicated or not storing it at all I can only imagine with each search gets 50 of this the database will explode
 class JobPosting(Base):
     """Model representing a single job posting from SerpAPI.
-    
+
     Stores individual job results from job search queries.
     """
+
     __tablename__ = "job_postings"
-    
+
     # Primary key
     id = Column(
         UUID(as_uuid=True),
@@ -131,7 +150,7 @@ class JobPosting(Base):
         default=uuid.uuid4,
         doc="Unique identifier for the job posting",
     )
-    
+
     # Foreign key
     job_search_id = Column(
         UUID(as_uuid=True),
@@ -139,7 +158,7 @@ class JobPosting(Base):
         nullable=False,
         doc="Reference to the job search that found this posting",
     )
-    
+
     # Job details from SerpAPI
     job_id = Column(
         Text,
@@ -176,7 +195,7 @@ class JobPosting(Base):
         nullable=True,
         doc="Full job description",
     )
-    
+
     # JSON fields for complex data
     extensions = Column(
         JSON,
@@ -198,7 +217,7 @@ class JobPosting(Base):
         nullable=True,
         doc="Available application options",
     )
-    
+
     # Timestamps
     created_at = Column(
         DateTime,
@@ -206,19 +225,23 @@ class JobPosting(Base):
         nullable=False,
         doc="Timestamp when the posting was created",
     )
-    
+
     # Relationships
     job_search = relationship("JobSearch", back_populates="job_postings")
-    matched_job = relationship("MatchedJob", back_populates="job_posting", uselist=False)
-    
+    matched_job = relationship(
+        "MatchedJob", back_populates="job_posting", uselist=False
+    )
+
     @classmethod
-    def from_job_result(cls, job_result: "JobResult", job_search_id: uuid.UUID) -> "JobPosting":
+    def from_job_result(
+        cls, job_result: "JobResult", job_search_id: uuid.UUID
+    ) -> "JobPosting":
         """Create a JobPosting instance from JobResult.
-        
+
         Args:
             job_result: JobResult object from SerpAPI
             job_search_id: UUID of the associated JobSearch
-            
+
         Returns:
             JobPosting instance
         """
@@ -239,7 +262,7 @@ class JobPosting(Base):
             if job_result.apply_options
             else None
         )
-        
+
         return cls(
             id=uuid.uuid4(),
             job_search_id=job_search_id,
@@ -259,12 +282,13 @@ class JobPosting(Base):
 
 class MatchedJob(Base):
     """Model representing a job that matched the user profile.
-    
+
     Stores results from the AI screening agent, including match status
     and reasoning.
     """
+
     __tablename__ = "matched_jobs"
-    
+
     # Primary key
     id = Column(
         UUID(as_uuid=True),
@@ -272,7 +296,7 @@ class MatchedJob(Base):
         default=uuid.uuid4,
         doc="Unique identifier for the matched job record",
     )
-    
+
     # Foreign keys
     job_search_id = Column(
         UUID(as_uuid=True),
@@ -287,7 +311,7 @@ class MatchedJob(Base):
         unique=True,
         doc="Reference to the job posting",
     )
-    
+
     # Match details from AI screening
     is_match = Column(
         Boolean,
@@ -305,14 +329,14 @@ class MatchedJob(Base):
         nullable=True,
         doc="Summary of the job description (from AI agent)",
     )
-    
+
     # Application link
     application_link = Column(
         JSON,
         nullable=True,
         doc="Application link with 'via' and 'link' keys",
     )
-    
+
     # Timestamps
     created_at = Column(
         DateTime,
@@ -327,11 +351,11 @@ class MatchedJob(Base):
         nullable=False,
         doc="Timestamp when the match was last updated",
     )
-    
+
     # Relationships
     job_search = relationship("JobSearch", back_populates="matched_jobs")
     job_posting = relationship("JobPosting", back_populates="matched_job")
-    
+
     @classmethod
     def from_screening_output(
         cls,
@@ -340,12 +364,12 @@ class MatchedJob(Base):
         job_posting_id: uuid.UUID,
     ) -> "MatchedJob":
         """Create a MatchedJob instance from JobScreeningOutput.
-        
+
         Args:
             output: JobScreeningOutput object from screening agent
             job_search_id: UUID of the associated JobSearch
             job_posting_id: UUID of the associated JobPosting
-            
+
         Returns:
             MatchedJob instance
         """
@@ -362,12 +386,13 @@ class MatchedJob(Base):
 
 class UserProfile(Base):
     """UserProfile model to store the structured user profile.
-    
+
     Stores user information extracted from PDFs so the profiling step can check
     if a profile exists under the same name and email before calling the LLM.
     """
+
     __tablename__ = "user_profiles"
-    
+
     # Primary key
     id = Column(
         UUID(as_uuid=True),
@@ -375,45 +400,45 @@ class UserProfile(Base):
         default=uuid.uuid4,
         doc="Unique identifier for the user profile",
     )
-    
+
     # User identification (used for lookup)
     name = Column(
         String(255),
         nullable=False,
         doc="User's full name extracted from PDFs",
     )
-    
+
     email = Column(
         String(255),
         nullable=False,
         doc="User's email address extracted from PDFs",
     )
-    
+
     # Unique constraint on name + email combination
     __table_args__ = (
-        UniqueConstraint('name', 'email', name='uq_user_profile_name_email'),
+        UniqueConstraint("name", "email", name="uq_user_profile_name_email"),
     )
-    
+
     # Profile content
     profile_text = Column(
         Text,
         nullable=False,
         doc="Structured user profile text extracted from PDFs",
     )
-    
+
     # Source information
     references = Column(
         JSON,
         nullable=True,
         doc="References like file names, URLs, LinkedIn profile, etc.",
     )
-    
+
     source_pdfs = Column(
         JSON,
         nullable=True,
         doc="List of PDF file paths used to generate this profile",
     )
-    
+
     # Timestamps
     created_at = Column(
         DateTime,
@@ -428,14 +453,14 @@ class UserProfile(Base):
         nullable=False,
         doc="Timestamp when the profile was last updated",
     )
-    
+
     # Usage tracking
     last_used_at = Column(
         DateTime,
         nullable=True,
         doc="Timestamp when the profile was last used in a job search",
     )
-    
+
     @classmethod
     def from_context(
         cls,
@@ -444,23 +469,29 @@ class UserProfile(Base):
         pdf_paths: Optional[list] = None,
     ) -> "UserProfile":
         """Create a UserProfile instance from WorkflowContext.
-        
+
         Args:
             context: WorkflowContext object containing profile information
             references: Optional references (LinkedIn, portfolio, etc.)
             pdf_paths: Optional list of PDF file paths (will be converted to strings)
-            
+
         Returns:
             UserProfile instance
-            
+
         Raises:
             ValueError: If context doesn't have required profile information
         """
-        if not context.user_profile or not context.profile_name or not context.profile_email:
-            raise ValueError("Context must have user_profile, profile_name, and profile_email")
-        
+        if (
+            not context.user_profile
+            or not context.profile_name
+            or not context.profile_email
+        ):
+            raise ValueError(
+                "Context must have user_profile, profile_name, and profile_email"
+            )
+
         pdf_paths_str = [str(p) for p in pdf_paths] if pdf_paths else None
-        
+
         return cls(
             id=uuid.uuid4(),
             name=context.profile_name,
@@ -469,3 +500,68 @@ class UserProfile(Base):
             references=references,
             source_pdfs=pdf_paths_str,
         )
+
+class CompanyResearch(Base):
+    """CompanyResearch model to store the research results for a company.
+    
+    This model stores comprehensive research about a company for a specific job posting.
+    The research results contain information that can be cross-referenced with user profiles
+    and used to fabricate tailored application materials.
+    """
+
+    __tablename__ = "company_research"
+
+    # Primary key
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        doc="Unique identifier for the company research",
+    )
+
+    # Company and job reference
+    company_name = Column(
+        String(255),
+        nullable=False,
+        doc="Company name (denormalized for quick access)",
+    )
+    
+    job_posting_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("job_postings.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,  # One research per job posting
+        doc="Reference to the job posting",
+    )
+
+    # Research content
+    research_results = Column(
+        Text,
+        nullable=False,
+        doc="Synthesized research results about the company, team, culture, and expectations",
+    )
+    
+    citations = Column(
+        JSON,
+        nullable=True,
+        doc="List of citations/sources used in the research (stored as JSON array)",
+    )
+
+    # Timestamps
+    created_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        doc="Timestamp when the research was created",
+    )
+    
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        doc="Timestamp when the research was last updated",
+    )
+
+    # Relationship
+    job_posting = relationship("JobPosting", backref="company_research")
