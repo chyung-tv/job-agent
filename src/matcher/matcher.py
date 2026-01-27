@@ -2,7 +2,7 @@
 
 import uuid
 import hashlib
-from typing import List, Optional, TypedDict
+from typing import List, Optional, TypedDict, TYPE_CHECKING
 from pydantic_ai import Agent
 from pydantic import BaseModel, Field
 from src.discovery.serpapi_models import JobResult
@@ -18,6 +18,9 @@ try:
     DB_AVAILABLE = True
 except ImportError:
     DB_AVAILABLE = False
+
+if TYPE_CHECKING:
+    from src.workflow.context import WorkflowContext
 
 
 class ApplicationLinkType(TypedDict):
@@ -122,64 +125,72 @@ IMPORTANT:
 
     def screen_jobs(
         self,
-        user_profile: str,
-        jobs: List[JobResult],
+        context: "WorkflowContext",
         max_jobs: Optional[int] = None,
         verbose: bool = True,
         save_to_db: bool = True,
-        job_search_id: Optional[uuid.UUID] = None,
-    ) -> List[JobScreeningOutput]:
-        """Screen multiple jobs against a user profile with optional database persistence.
-
+    ) -> "WorkflowContext":
+        """Screen jobs using WorkflowContext (Context Object Pattern).
+        
+        Updates the context with matched_results and all_screening_results.
+        
         Args:
-            user_profile: The user's profile/skills description
-            jobs: List of jobs to screen (must have job_id set)
-            max_jobs: Maximum number of jobs to screen (None for all)
+            context: WorkflowContext object containing user_profile and jobs
+            max_jobs: Maximum number of jobs to screen (None for all, uses context.max_screening if None)
             verbose: Whether to print matching progress
             save_to_db: Whether to save matched jobs to database (default: True)
-            job_search_id: JobSearch ID to link matched jobs to (required if save_to_db=True)
-
+            
         Returns:
-            List of JobScreeningOutput objects for matched jobs
+            Updated WorkflowContext with matching results populated
         """
-        jobs_to_screen = jobs[:max_jobs] if max_jobs else jobs
+        if not context.validate_for_matching():
+            return context
+        
+        # Use context.max_screening if max_jobs not provided
+        if max_jobs is None:
+            max_jobs = context.max_screening
+        
+        jobs_to_screen = context.jobs[:max_jobs] if max_jobs else context.jobs
         matched_results: List[JobScreeningOutput] = []
         all_screening_results: List[JobScreeningOutput] = []
-
+        
         if verbose:
             print(f"\nMatching {len(jobs_to_screen)} jobs against user profile...\n")
-
+        
         for job in jobs_to_screen:
-            result = self.match_job(user_profile, job)
+            result = self.match_job(context.user_profile, job)
             if not result:
                 continue
-
+            
             all_screening_results.append(result)
-
+            
             if verbose:
                 status = "✓ MATCH" if result.is_match else "✗ No match"
                 print(f"{status} - {result.job_title} at {result.job_company}")
                 if result.reason:
                     print(f"  Reason: {result.reason}")
-
+            
             if result.is_match:
                 matched_results.append(result)
-
+        
         # Save matched jobs to database
-        if save_to_db and DB_AVAILABLE and job_search_id and matched_results:
+        if save_to_db and DB_AVAILABLE and context.job_search_id and matched_results:
             try:
                 self._save_matched_jobs_to_db(
                     matched_results=matched_results,
                     all_screening_results=all_screening_results,
                     jobs=jobs_to_screen,
-                    job_search_id=job_search_id,
+                    job_search_id=context.job_search_id,
                 )
             except Exception as e:
                 print(f"[WARNING] Failed to save matched jobs to database: {e}")
                 import traceback
                 traceback.print_exc()
-
-        return matched_results
+        
+        context.matched_results = matched_results
+        context.all_screening_results = all_screening_results
+        
+        return context
 
     def _save_matched_jobs_to_db(
         self,

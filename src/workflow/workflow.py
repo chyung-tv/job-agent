@@ -9,6 +9,7 @@ from src.discovery.serpapi_service import SerpApiJobsService
 from src.discovery.serpapi_models import JobResult
 from src.profiling.profile import build_user_profile
 from src.matcher.matcher import JobScreeningAgent, JobScreeningOutput
+from src.workflow.context import WorkflowContext
 
 nest_asyncio.apply()
 load_dotenv()
@@ -77,15 +78,18 @@ def run(
     google_domain: str = "google.com",
     hl: str = "en",
     gl: str = "us",
-) -> list[JobScreeningOutput]:
-    """Run the complete job search, profiling, and matching workflow.
-
+) -> WorkflowContext:
+    """Run the complete workflow using Context Object Pattern.
+    
+    This implementation uses WorkflowContext to carry state through the pipeline,
+    improving modularity and making it easier to extend the workflow with new steps.
+    
     Workflow steps:
     1. Discovery: Search for jobs using SerpAPI
     2. Profiling: Extract and build user profile from PDF documents
     3. Matching: Screen jobs using AI agent against user profile
     4. Display: Show matched jobs
-
+    
     Args:
         query: Job search query (e.g., "software engineer", "ai developer")
         location: Location for the search (e.g., "Hong Kong")
@@ -97,111 +101,120 @@ def run(
         google_domain: Google domain to use (default: "google.com")
         hl: Language code (default: "en")
         gl: Country code (default: "us")
-
+    
     Returns:
-        List of JobScreeningOutput objects for matched jobs
+        WorkflowContext object with all workflow state populated
     """
+    # Create initial context
+    context = WorkflowContext(
+        query=query,
+        location=location,
+        num_results=num_results,
+        max_screening=max_screening,
+        pdf_paths=pdf_paths,
+        data_dir=data_dir,
+        google_domain=google_domain,
+        hl=hl,
+        gl=gl,
+    )
+    
     # Step 1: Discovery - Search for jobs
     print("=" * 80)
     print("STEP 1: DISCOVERY - Searching for jobs...")
     print("=" * 80)
-    print(f"Query: {query}")
-    print(f"Location: {location}\n")
-
+    print(f"Query: {context.query}")
+    print(f"Location: {context.location}\n")
+    
     service = SerpApiJobsService.create()
-    jobs, job_search_id = service.search_jobs(
-        query=query,
-        location=location,
-        num_results=num_results,
-        google_domain=google_domain,
-        hl=hl,
-        gl=gl,
-        save_to_db=True,
-    )
-
-    print(f"Found {len(jobs)} jobs\n")
-    if job_search_id:
-        print(f"[DATABASE] Saved job search with ID: {job_search_id}\n")
-    display_jobs(jobs, max_display=5)
-
+    context = service.search_jobs(context, save_to_db=True)
+    
+    print(f"Found {len(context.jobs)} jobs\n")
+    if context.job_search_id:
+        print(f"[DATABASE] Saved job search with ID: {context.job_search_id}\n")
+    display_jobs(context.jobs, max_display=5)
+    
     # Step 2: Profiling - Build user profile from PDFs
     print("\n" + "=" * 80)
     print("STEP 2: PROFILING - Building user profile from documents...")
     print("=" * 80)
-
+    
     try:
-        user_profile, was_cached = build_user_profile(
-            pdf_paths=pdf_paths, data_dir=data_dir
-        )
-        if was_cached:
+        context = build_user_profile(context)
+        
+        # Check if profile was actually built
+        if not context.user_profile:
+            context.add_error("Profile building completed but profile is empty")
+            print("\n[ERROR] Profile is empty - check PDF files and try again")
+            raise ValueError("Profile is empty")
+        
+        if context.profile_was_cached:
             print(
-                f"\n[SUCCESS] Profile loaded from cache ({len(user_profile)} characters)"
+                f"\n[SUCCESS] Profile loaded from cache ({len(context.user_profile)} characters)"
             )
         else:
             print(
-                f"\n[SUCCESS] Profile built successfully ({len(user_profile)} characters)"
+                f"\n[SUCCESS] Profile built successfully ({len(context.user_profile)} characters)"
             )
     except Exception as e:
+        context.add_error(f"Failed to build profile: {e}")
         print(f"\n[ERROR] Failed to build profile: {e}")
         raise
-
+    
     # Step 3: Matching - Screen jobs using AI agent
     print("\n" + "=" * 80)
     print("STEP 3: MATCHING - Screening jobs against user profile...")
     print("=" * 80)
-
+    
     screening_agent = JobScreeningAgent()
-    matched_results = screening_agent.screen_jobs(
-        user_profile=user_profile,
-        jobs=jobs,
-        max_jobs=max_screening,
+    context = screening_agent.screen_jobs(
+        context,
         verbose=True,
         save_to_db=True,
-        job_search_id=job_search_id,
     )
-
+    
     # Update JobSearch with final statistics
-    if job_search_id:
+    if context.job_search_id:
         try:
             from src.database import db_session, GenericRepository, JobSearch
-
+            
             session = next(db_session())
             try:
                 job_search_repo = GenericRepository(session, JobSearch)
-                job_search = job_search_repo.get(str(job_search_id))
+                job_search = job_search_repo.get(str(context.job_search_id))
                 if job_search:
-                    job_search.jobs_screened = min(max_screening, len(jobs))
-                    job_search.matches_found = len(matched_results)
+                    job_search.jobs_screened = len(context.all_screening_results)
+                    job_search.matches_found = len(context.matched_results)
                     job_search_repo.update(job_search)
                     print("\n[DATABASE] Updated job search statistics")
             finally:
                 session.close()
         except Exception as e:
+            context.add_error(f"Failed to update job search statistics: {e}")
             print(f"[WARNING] Failed to update job search statistics: {e}")
-
+    
     # Step 4: Display summary and matched jobs
     print(f"\n{'=' * 80}")
     print("SUMMARY")
     print("=" * 80)
-    print(f"Total jobs found: {len(jobs)}")
-    print(f"Jobs screened: {min(max_screening, len(jobs))}")
-    print(f"Matches found: {len(matched_results)}")
-
-    display_matched_jobs(matched_results)
-
-    return matched_results
+    print(f"Total jobs found: {len(context.jobs)}")
+    print(f"Jobs screened: {len(context.all_screening_results)}")
+    print(f"Matches found: {len(context.matched_results)}")
+    
+    display_matched_jobs(context.matched_results)
+    
+    return context
 
 
 def main():
     """Main entry point for the workflow."""
-    matched_jobs = run(
+    context = run(
         query="software engineer",
         location="Hong Kong",
         num_results=30,
         max_screening=3,
     )
 
-    return matched_jobs
+    return context.matched_results
 
 
 if __name__ == "__main__":

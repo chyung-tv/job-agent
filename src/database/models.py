@@ -2,12 +2,18 @@
 
 import uuid
 from datetime import datetime
+from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import JSON, Column, DateTime, String, Boolean, ForeignKey, Text, Integer, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
 from src.database.session import Base
+
+if TYPE_CHECKING:
+    from src.workflow.context import WorkflowContext
+    from src.discovery.serpapi_models import JobResult
+    from src.matcher.matcher import JobScreeningOutput
 
 
 class JobSearch(Base):
@@ -88,6 +94,27 @@ class JobSearch(Base):
     # Relationships
     job_postings = relationship("JobPosting", back_populates="job_search", cascade="all, delete-orphan")
     matched_jobs = relationship("MatchedJob", back_populates="job_search", cascade="all, delete-orphan")
+    
+    @classmethod
+    def from_context(cls, context: "WorkflowContext", total_jobs_found: int = 0) -> "JobSearch":
+        """Create a JobSearch instance from WorkflowContext.
+        
+        Args:
+            context: WorkflowContext object containing search parameters
+            total_jobs_found: Total number of jobs found (default: 0)
+            
+        Returns:
+            JobSearch instance
+        """
+        return cls(
+            id=context.job_search_id or uuid.uuid4(),
+            query=context.query,
+            location=context.location,
+            google_domain=context.google_domain,
+            hl=context.hl,
+            gl=context.gl,
+            total_jobs_found=total_jobs_found,
+        )
 
 
 class JobPosting(Base):
@@ -183,6 +210,51 @@ class JobPosting(Base):
     # Relationships
     job_search = relationship("JobSearch", back_populates="job_postings")
     matched_job = relationship("MatchedJob", back_populates="job_posting", uselist=False)
+    
+    @classmethod
+    def from_job_result(cls, job_result: "JobResult", job_search_id: uuid.UUID) -> "JobPosting":
+        """Create a JobPosting instance from JobResult.
+        
+        Args:
+            job_result: JobResult object from SerpAPI
+            job_search_id: UUID of the associated JobSearch
+            
+        Returns:
+            JobPosting instance
+        """
+        # Convert Pydantic models to dict for JSON fields
+        extensions = job_result.extensions if job_result.extensions else []
+        detected_extensions = (
+            job_result.detected_extensions.model_dump()
+            if job_result.detected_extensions
+            else None
+        )
+        job_highlights = (
+            [h.model_dump() for h in job_result.job_highlights]
+            if job_result.job_highlights
+            else None
+        )
+        apply_options = (
+            [opt.model_dump() for opt in job_result.apply_options]
+            if job_result.apply_options
+            else None
+        )
+        
+        return cls(
+            id=uuid.uuid4(),
+            job_search_id=job_search_id,
+            job_id=job_result.job_id,
+            title=job_result.title,
+            company_name=job_result.company_name,
+            location=job_result.location,
+            via=job_result.via,
+            share_link=job_result.share_link,
+            description=job_result.description,
+            extensions=extensions,
+            detected_extensions=detected_extensions,
+            job_highlights=job_highlights,
+            apply_options=apply_options,
+        )
 
 
 class MatchedJob(Base):
@@ -259,6 +331,33 @@ class MatchedJob(Base):
     # Relationships
     job_search = relationship("JobSearch", back_populates="matched_jobs")
     job_posting = relationship("JobPosting", back_populates="matched_job")
+    
+    @classmethod
+    def from_screening_output(
+        cls,
+        output: "JobScreeningOutput",
+        job_search_id: uuid.UUID,
+        job_posting_id: uuid.UUID,
+    ) -> "MatchedJob":
+        """Create a MatchedJob instance from JobScreeningOutput.
+        
+        Args:
+            output: JobScreeningOutput object from screening agent
+            job_search_id: UUID of the associated JobSearch
+            job_posting_id: UUID of the associated JobPosting
+            
+        Returns:
+            MatchedJob instance
+        """
+        return cls(
+            id=uuid.uuid4(),
+            job_search_id=job_search_id,
+            job_posting_id=job_posting_id,
+            is_match=output.is_match,
+            reason=output.reason,
+            job_description_summary=output.job_description,
+            application_link=output.application_link,
+        )
 
 
 class UserProfile(Base):
@@ -336,3 +435,37 @@ class UserProfile(Base):
         nullable=True,
         doc="Timestamp when the profile was last used in a job search",
     )
+    
+    @classmethod
+    def from_context(
+        cls,
+        context: "WorkflowContext",
+        references: Optional[dict] = None,
+        pdf_paths: Optional[list] = None,
+    ) -> "UserProfile":
+        """Create a UserProfile instance from WorkflowContext.
+        
+        Args:
+            context: WorkflowContext object containing profile information
+            references: Optional references (LinkedIn, portfolio, etc.)
+            pdf_paths: Optional list of PDF file paths (will be converted to strings)
+            
+        Returns:
+            UserProfile instance
+            
+        Raises:
+            ValueError: If context doesn't have required profile information
+        """
+        if not context.user_profile or not context.profile_name or not context.profile_email:
+            raise ValueError("Context must have user_profile, profile_name, and profile_email")
+        
+        pdf_paths_str = [str(p) for p in pdf_paths] if pdf_paths else None
+        
+        return cls(
+            id=uuid.uuid4(),
+            name=context.profile_name,
+            email=context.profile_email,
+            profile_text=context.user_profile,
+            references=references,
+            source_pdfs=pdf_paths_str,
+        )

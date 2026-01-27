@@ -1,7 +1,7 @@
 """Profiling step: Extract and build user profile from PDF documents."""
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 from pydantic_ai import Agent
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
@@ -18,6 +18,9 @@ try:
     DB_AVAILABLE = True
 except ImportError:
     DB_AVAILABLE = False
+
+if TYPE_CHECKING:
+    from src.workflow.context import WorkflowContext
 
 
 class ProfilingOutput(BaseModel):
@@ -198,13 +201,16 @@ def _save_profile_to_db(
         print(f"[WARNING] Failed to save profile to database: {e}")
 
 
+
+
 def build_user_profile(
-    pdf_paths: Optional[list[Path]] = None,
-    data_dir: Optional[Path] = None,
+    context: "WorkflowContext",
     model: str = "google-gla:gemini-2.5-flash",
     use_cache: bool = True,
-) -> tuple[str, bool]:
-    """Build a structured user profile from PDF documents using AI.
+) -> "WorkflowContext":
+    """Build user profile using WorkflowContext (Context Object Pattern).
+    
+    Updates the context with user_profile, profile_was_cached, profile_name, and profile_email.
     
     This function will:
     1. Check database for cached profile (if use_cache=True)
@@ -212,27 +218,31 @@ def build_user_profile(
     3. Save profile to database for future use
     
     Args:
-        pdf_paths: Optional list of specific PDF paths to parse.
-                   If None, will look for common files in data_dir.
-        data_dir: Directory to search for PDFs if pdf_paths not provided.
-        model: AI model to use for profile extraction.
+        context: WorkflowContext object containing pdf_paths and/or data_dir
+        model: AI model to use for profile extraction
         use_cache: Whether to use cached profile from database (default: True)
         
     Returns:
-        Tuple of (structured user profile string, was_cached: bool)
-        was_cached is True if profile was loaded from cache, False if newly built
+        Updated WorkflowContext with profile information populated
     """
+    # Set default data_dir if not provided (before validation)
+    if context.data_dir is None and context.pdf_paths is None:
+        # Default to data/ directory relative to project root
+        context.data_dir = Path(__file__).parent.parent.parent / "data"
+    
+    if not context.validate_for_profiling():
+        return context
+    
     # Determine which PDFs to parse
+    pdf_paths = context.pdf_paths
     if pdf_paths is None:
-        if data_dir is None:
-            # Default to data/ directory relative to project root
-            data_dir = Path(__file__).parent.parent.parent / "data"
-        
+        data_dir = context.data_dir
         # Look for common PDF files
         common_files = ["linkdeln.pdf", "linkedin.pdf", "CV_YungCH.pdf", "cv.pdf", "resume.pdf"]
         pdf_paths = [data_dir / f for f in common_files if (data_dir / f).exists()]
     
     if not pdf_paths:
+        context.add_error("No PDF files found to parse. Please provide pdf_paths or ensure PDFs exist in data directory.")
         raise ValueError("No PDF files found to parse. Please provide pdf_paths or ensure PDFs exist in data directory.")
     
     # Extract text from PDFs first (needed for name/email extraction and LLM)
@@ -245,19 +255,23 @@ def build_user_profile(
     name, email = _extract_name_email_from_text(raw_text)
     
     # Try to load from database cache using name and email
+    was_cached = False
+    profile_text = None
     if use_cache and name and email:
         cached_profile = _load_profile_from_db(name, email)
         if cached_profile:
-            return (cached_profile, True)
+            profile_text = cached_profile
+            was_cached = True
     
-    # Use AI agent to structure the profile
-    print("\n" + "=" * 80)
-    print("Step 2: Building structured profile using AI...")
-    print("=" * 80)
-    
-    profiling_agent = Agent(model=model, output_type=ProfilingOutput)
-    
-    prompt = f"""Extract and structure a comprehensive user profile from the following documents.
+    # If not cached, use AI agent to structure the profile
+    if not profile_text:
+        print("\n" + "=" * 80)
+        print("Step 2: Building structured profile using AI...")
+        print("=" * 80)
+        
+        profiling_agent = Agent(model=model, output_type=ProfilingOutput)
+        
+        prompt = f"""Extract and structure a comprehensive user profile from the following documents.
 
 IMPORTANT: Extract the following information:
 1. Full name of the person
@@ -274,23 +288,34 @@ Documents:
 {raw_text}
 
 Return a structured response with name, email, references (if any), and a detailed profile."""
+        
+        result = profiling_agent.run_sync(prompt)
+        output = result.output
+        
+        # Use extracted name/email from LLM (more accurate than regex)
+        name = output.name
+        email = output.email
+        profile_text = output.profile
+        references = output.references
+        
+        # Save to database for future use
+        _save_profile_to_db(
+            name=name,
+            email=email,
+            profile_text=profile_text,
+            references=references,
+            pdf_paths=pdf_paths,
+        )
     
-    result = profiling_agent.run_sync(prompt)
-    output = result.output
+    # Update context with profile information
+    # Ensure profile_text is never None (use empty string if needed)
+    context.user_profile = profile_text or ""
+    context.profile_was_cached = was_cached
+    context.profile_name = name
+    context.profile_email = email
     
-    # Use extracted name/email from LLM (more accurate than regex)
-    name = output.name
-    email = output.email
-    profile_text = output.profile
-    references = output.references
+    # If profile is empty, add error
+    if not context.user_profile:
+        context.add_error("Profile was built but is empty. Check PDF files and LLM output.")
     
-    # Save to database for future use
-    _save_profile_to_db(
-        name=name,
-        email=email,
-        profile_text=profile_text,
-        references=references,
-        pdf_paths=pdf_paths,
-    )
-    
-    return (profile_text, False)
+    return context

@@ -2,10 +2,13 @@
 
 import os
 import uuid
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any, Tuple, TYPE_CHECKING
 from serpapi import Client
 from .serpapi_models import SerpApiJobsResponse, JobResult
 from dotenv import load_dotenv
+
+if TYPE_CHECKING:
+    from src.workflow.context import WorkflowContext
 
 load_dotenv()
 
@@ -109,108 +112,6 @@ class SerpApiJobsService:
             # Handle any unexpected attribute access errors gracefully
             return None
 
-    def search_jobs(
-        self,
-        query: str,
-        location: Optional[str] = None,
-        num_results: int = 10,
-        google_domain: str = "google.com",
-        hl: str = "en",
-        gl: str = "us",
-        save_to_db: bool = True,
-        job_search_id: Optional[uuid.UUID] = None,
-    ) -> Tuple[List[JobResult], Optional[uuid.UUID]]:
-        """Search for jobs with pagination support and optional database persistence.
-
-        Args:
-            query: Search query (e.g., "software engineer")
-            location: Location for the search (e.g., "Hong Kong")
-            num_results: Number of results to fetch (default: 10)
-            google_domain: Google domain to use (default: "google.com")
-            hl: Language code (default: "en")
-            gl: Country code (default: "us")
-            save_to_db: Whether to save results to database (default: True)
-            job_search_id: Optional existing JobSearch ID to link postings to.
-                         If None and save_to_db=True, creates a new JobSearch.
-
-        Returns:
-            Tuple of (List of JobResult objects, JobSearch UUID if saved, None otherwise)
-        """
-        all_jobs: List[JobResult] = []
-
-        # Calculate number of pages needed (ceiling division)
-        num_pages = (num_results + self.RESULTS_PER_PAGE - 1) // self.RESULTS_PER_PAGE
-
-        # Get base parameters (without next_page_token)
-        base_params = self._build_base_params(
-            query=query,
-            location=location,
-            google_domain=google_domain,
-            hl=hl,
-            gl=gl,
-        )
-
-        next_page_token: Optional[str] = None
-
-        for page_num in range(num_pages):
-            # Create fresh params for this page
-            params = base_params.copy()
-
-            # Only add next_page_token for subsequent pages (not the first page)
-            if next_page_token:
-                params["next_page_token"] = next_page_token
-
-            # Perform API call
-            try:
-                results = self.client.search(params)
-            except Exception as e:
-                # API call failed - log and break
-                print(f"API Error fetching page {page_num + 1}: {e}")
-                break
-
-            # Parse response into model
-            try:
-                response = SerpApiJobsResponse.from_serpapi_results(results.as_dict())
-            except Exception as e:
-                # Model validation failed - log detailed error and break
-                print(f"Model Validation Error on page {page_num + 1}: {e}")
-                print(f"Response keys: {list(results.as_dict().keys()) if hasattr(results, 'as_dict') else 'N/A'}")
-                break
-
-            # Add jobs from this page
-            if response.jobs_results:
-                all_jobs.extend(response.jobs_results)
-
-            # Check if we have enough results
-            if len(all_jobs) >= num_results:
-                all_jobs = all_jobs[:num_results]
-                # Break early but still save to DB below
-                break
-
-            # Check if there's a next page available using safe helper method
-            next_page_token = self._get_next_page_token(response)
-            if not next_page_token:
-                # No more pages available
-                break
-
-        # Save to database if requested
-        saved_job_search_id = None
-        if save_to_db and DB_AVAILABLE and all_jobs:
-            try:
-                saved_job_search_id = self._save_jobs_to_db(
-                    jobs=all_jobs,
-                    query=query,
-                    location=location or "",
-                    google_domain=google_domain,
-                    hl=hl,
-                    gl=gl,
-                    job_search_id=job_search_id,
-                )
-            except Exception as e:
-                print(f"[WARNING] Failed to save jobs to database: {e}")
-                # Continue execution even if database save fails
-
-        return all_jobs, saved_job_search_id
 
     def _save_jobs_to_db(
         self,
@@ -338,6 +239,105 @@ class SerpApiJobsService:
                 next(session_gen, None)  # Consume generator to trigger commit
             except StopIteration:
                 pass
+
+    def search_jobs(
+        self,
+        context: "WorkflowContext",
+        save_to_db: bool = True,
+    ) -> "WorkflowContext":
+        """Search for jobs using WorkflowContext (Context Object Pattern).
+        
+        Updates the context with jobs and job_search_id.
+        
+        Args:
+            context: WorkflowContext object containing search parameters
+            save_to_db: Whether to save results to database (default: True)
+            
+        Returns:
+            Updated WorkflowContext with jobs and job_search_id populated
+        """
+        if not context.validate_for_discovery():
+            return context
+        
+        all_jobs: List[JobResult] = []
+
+        # Calculate number of pages needed (ceiling division)
+        num_pages = (context.num_results + self.RESULTS_PER_PAGE - 1) // self.RESULTS_PER_PAGE
+
+        # Get base parameters (without next_page_token)
+        base_params = self._build_base_params(
+            query=context.query,
+            location=context.location,
+            google_domain=context.google_domain,
+            hl=context.hl,
+            gl=context.gl,
+        )
+
+        next_page_token: Optional[str] = None
+
+        for page_num in range(num_pages):
+            # Create fresh params for this page
+            params = base_params.copy()
+
+            # Only add next_page_token for subsequent pages (not the first page)
+            if next_page_token:
+                params["next_page_token"] = next_page_token
+
+            # Perform API call
+            try:
+                results = self.client.search(params)
+            except Exception as e:
+                # API call failed - log and break
+                print(f"API Error fetching page {page_num + 1}: {e}")
+                break
+
+            # Parse response into model
+            try:
+                response = SerpApiJobsResponse.from_serpapi_results(results.as_dict())
+            except Exception as e:
+                # Model validation failed - log detailed error and break
+                print(f"Model Validation Error on page {page_num + 1}: {e}")
+                print(f"Response keys: {list(results.as_dict().keys()) if hasattr(results, 'as_dict') else 'N/A'}")
+                break
+
+            # Add jobs from this page
+            if response.jobs_results:
+                all_jobs.extend(response.jobs_results)
+
+            # Check if we have enough results
+            if len(all_jobs) >= context.num_results:
+                all_jobs = all_jobs[:context.num_results]
+                # Break early but still save to DB below
+                break
+
+            # Check if there's a next page available using safe helper method
+            next_page_token = self._get_next_page_token(response)
+            if not next_page_token:
+                # No more pages available
+                break
+
+        # Save to database if requested
+        saved_job_search_id = context.job_search_id
+        if save_to_db and DB_AVAILABLE and all_jobs:
+            try:
+                saved_job_search_id = self._save_jobs_to_db(
+                    jobs=all_jobs,
+                    query=context.query,
+                    location=context.location or "",
+                    google_domain=context.google_domain,
+                    hl=context.hl,
+                    gl=context.gl,
+                    job_search_id=context.job_search_id,
+                )
+            except Exception as e:
+                context.add_error(f"Failed to save jobs to database: {e}")
+                print(f"[WARNING] Failed to save jobs to database: {e}")
+                # Continue execution even if database save fails
+        
+        context.jobs = all_jobs
+        context.job_search_id = saved_job_search_id
+        
+        return context
 
     @classmethod
     def create(cls, api_key: Optional[str] = None) -> "SerpApiJobsService":
