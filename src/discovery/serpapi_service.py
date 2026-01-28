@@ -8,7 +8,7 @@ from .serpapi_models import SerpApiJobsResponse, JobResult
 from dotenv import load_dotenv
 
 if TYPE_CHECKING:
-    from src.workflow.context import WorkflowContext
+    from src.workflow.base_context import JobSearchWorkflowContext as WorkflowContext  # Alias for backward compatibility
 
 load_dotenv()
 

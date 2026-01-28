@@ -20,7 +20,7 @@ except ImportError:
     DB_AVAILABLE = False
 
 if TYPE_CHECKING:
-    from src.workflow.context import WorkflowContext
+    from src.workflow.base_context import JobSearchWorkflowContext as WorkflowContext  # Alias for backward compatibility
 
 
 class ProfilingOutput(BaseModel):

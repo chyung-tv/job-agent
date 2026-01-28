@@ -21,7 +21,7 @@ from sqlalchemy.orm import relationship
 from src.database.session import Base
 
 if TYPE_CHECKING:
-    from src.workflow.context import WorkflowContext
+    from src.workflow.base_context import JobSearchWorkflowContext as WorkflowContext  # Alias for backward compatibility
     from src.discovery.serpapi_models import JobResult
     from src.matcher.matcher import JobScreeningOutput
 
@@ -844,3 +844,95 @@ class Artifact(Base):
     
     # Relationship
     matched_job = relationship("MatchedJob", backref="artifact", uselist=False)
+
+
+class WorkflowExecution(Base):
+    """Unified model to track workflow execution state.
+    
+    Provides a single table for tracking workflow execution across different
+    workflow types, storing context snapshots and execution status.
+    """
+    
+    __tablename__ = "workflow_executions"
+    
+    # Primary key
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        doc="Unique identifier for the workflow execution",
+    )
+    
+    # Foreign key
+    run_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("runs.id", ondelete="CASCADE"),
+        nullable=False,
+        doc="Reference to the run",
+    )
+    
+    # Workflow metadata
+    workflow_type = Column(
+        String(255),
+        nullable=False,
+        doc="Type of workflow (e.g., 'job_search')",
+    )
+    
+    # Status tracking
+    status = Column(
+        String(50),
+        nullable=False,
+        default="pending",
+        doc="Execution status: pending, processing, completed, failed",
+    )
+    
+    current_node = Column(
+        String(255),
+        nullable=True,
+        doc="Name of the current node being executed",
+    )
+    
+    # Context snapshot (stores complete context as JSON)
+    context_snapshot = Column(
+        JSON,
+        nullable=True,
+        doc="Complete snapshot of workflow context at this point in execution",
+    )
+    
+    # Error tracking
+    error_message = Column(
+        Text,
+        nullable=True,
+        doc="Error message if execution failed",
+    )
+    
+    # Timestamps
+    started_at = Column(
+        DateTime,
+        nullable=True,
+        doc="Timestamp when workflow execution started",
+    )
+    
+    completed_at = Column(
+        DateTime,
+        nullable=True,
+        doc="Timestamp when workflow execution completed",
+    )
+    
+    created_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        doc="Timestamp when the execution record was created",
+    )
+    
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        doc="Timestamp when the execution record was last updated",
+    )
+    
+    # Relationship
+    run = relationship("Run", backref="workflow_executions")

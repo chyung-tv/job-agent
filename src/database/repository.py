@@ -7,7 +7,7 @@ from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
 if TYPE_CHECKING:
-    from src.workflow.context import WorkflowContext
+    from src.workflow.base_context import JobSearchWorkflowContext as WorkflowContext  # Alias for backward compatibility
     from src.discovery.serpapi_models import JobResult
     from src.matcher.matcher import JobScreeningOutput
 

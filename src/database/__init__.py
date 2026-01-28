@@ -11,7 +11,17 @@ from src.database.repository import (
     save_user_profile_from_context,
     find_job_posting_by_screening_output,
 )
-from src.database.models import JobSearch, JobPosting, MatchedJob, UserProfile
+from src.database.models import (
+    JobSearch,
+    JobPosting,
+    MatchedJob,
+    UserProfile,
+    WorkflowExecution,
+    Run,
+    CompanyResearch,
+    CoverLetter,
+    Artifact,
+)
 
 __all__ = [
     "Base",
@@ -25,6 +35,11 @@ __all__ = [
     "JobPosting",
     "MatchedJob",
     "UserProfile",
+    "WorkflowExecution",
+    "Run",
+    "CompanyResearch",
+    "CoverLetter",
+    "Artifact",
     "save_job_search_from_context",
     "save_job_postings_from_context",
     "save_matched_jobs_from_context",
