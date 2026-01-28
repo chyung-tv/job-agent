@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from src.workflow.base_node import BaseNode
 from src.workflow.base_context import JobSearchWorkflowContext
 from src.database import db_session, Run, MatchedJob, JobPosting, CompanyResearch, Artifact
+from src.delivery.nylas_service import NylasService
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -107,6 +108,7 @@ class DeliveryNode(BaseNode):
                 "company_name": job_posting.company_name,
                 "location": job_posting.location,
                 "job_description": job_posting.description,
+                "match_reason": matched_job.reason,  # Add match reason
                 "application_link": matched_job.application_link,
                 "research": {
                     "id": str(company_research.id) if company_research else None,
@@ -128,8 +130,7 @@ class DeliveryNode(BaseNode):
     def _trigger_delivery(self, session: Session, run_id: str) -> Dict[str, any]:
         """Trigger delivery for all successfully completed items in a run.
         
-        This is a placeholder function that logs delivery information.
-        Future implementation will send email with application packages.
+        Sends email via Nylas with all application packages.
         
         Args:
             session: SQLAlchemy database session
@@ -154,42 +155,50 @@ class DeliveryNode(BaseNode):
                 "status": "no_items",
             }
         
-        # Update run delivery status
-        run = session.query(Run).filter_by(id=uuid.UUID(run_id)).first()
-        if run:
-            run.delivery_triggered = True
-            run.delivery_triggered_at = datetime.utcnow()
-            session.commit()
+        # Send email via Nylas
+        try:
+            nylas_service = NylasService()
+            send_result = nylas_service.send_job_application_email(
+                session=session,
+                completed_items=completed_items,
+            )
+            
+            if send_result.get("success"):
+                self.logger.info(f"Email sent successfully to {send_result.get('recipient')}")
+                self.logger.info(f"Message ID: {send_result.get('message_id')}")
+                
+                # Update run delivery status
+                run = session.query(Run).filter_by(id=uuid.UUID(run_id)).first()
+                if run:
+                    run.delivery_triggered = True
+                    run.delivery_triggered_at = datetime.utcnow()
+                    session.commit()
+                
+                return {
+                    "run_id": run_id,
+                    "items_delivered": send_result.get("items_sent", len(completed_items)),
+                    "status": "delivered",
+                    "recipient": send_result.get("recipient"),
+                    "message_id": send_result.get("message_id"),
+                }
+            else:
+                error_msg = send_result.get("error", "Unknown error")
+                self.logger.error(f"Failed to send email: {error_msg}")
+                return {
+                    "run_id": run_id,
+                    "items_delivered": 0,
+                    "status": "failed",
+                    "error": error_msg,
+                }
         
-        # Log delivery summary
-        self.logger.info(f"Preparing to deliver {len(completed_items)} application package(s):")
-        
-        for i, item in enumerate(completed_items, 1):
-            self.logger.info(f"{i}. {item['job_title']} at {item['company_name']}")
-            self.logger.info(f"   Location: {item['location']}")
-            self.logger.info(f"   Research: {'✓' if item['research']['results'] else '✗'}")
-            self.logger.info(f"   Cover Letter: {'✓' if item['cover_letter']['content'] else '✗'}")
-            if item['cover_letter']['content']:
-                subject = item['cover_letter']['content'].get('subject_line', 'N/A')
-                self.logger.info(f"   Subject: {subject}")
-            self.logger.info(f"   CV: {'✓' if item.get('cv', {}).get('pdf_url') else '✗'}")
-            if item.get('cv', {}).get('pdf_url'):
-                self.logger.info(f"   CV PDF: {item['cv']['pdf_url']}")
-        
-        self.logger.info("=" * 80)
-        self.logger.info("DELIVERY PLACEHOLDER")
-        self.logger.info("=" * 80)
-        self.logger.info("In future implementation, this will:")
-        self.logger.info("  1. Package research report, cover letter, and CV")
-        self.logger.info("  2. Send email to user with application packages")
-        self.logger.info("  3. Track delivery status")
-        
-        return {
-            "run_id": run_id,
-            "items_delivered": len(completed_items),
-            "status": "delivered",
-            "items": completed_items,
-        }
+        except Exception as e:
+            self.logger.error(f"Failed to send email via Nylas: {e}", exc_info=True)
+            return {
+                "run_id": run_id,
+                "items_delivered": 0,
+                "status": "failed",
+                "error": str(e),
+            }
     
     async def run(self, context: JobSearchWorkflowContext) -> JobSearchWorkflowContext:
         """Trigger delivery for completed items.
