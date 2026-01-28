@@ -11,12 +11,17 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from src.database.session import Base, engine
+
+# Import all models to ensure they're registered with Base.metadata
 from src.database.models import (
+    Run,
     JobSearch,
     JobPosting,
     MatchedJob,
     UserProfile,
     CompanyResearch,
+    CoverLetter,
+    Artifact,
 )
 
 
@@ -75,7 +80,7 @@ def create_tables(overwrite: bool = False):
 
 if __name__ == "__main__":
     # Check for --overwrite flag or OVERWRITE_TABLES environment variable
-    overwrite = False
+    overwrite = True
 
     # Check command line arguments
     if "--overwrite" in sys.argv or "-o" in sys.argv:

@@ -25,6 +25,112 @@ if TYPE_CHECKING:
     from src.discovery.serpapi_models import JobResult
     from src.matcher.matcher import JobScreeningOutput
 
+class Run(Base):
+    """Model representing a run of the application workflow.
+    
+    Tracks the complete workflow execution from job search through matching,
+    research, fabrication, and delivery. Used for orchestration and completion tracking.
+    """
+    __tablename__ = "runs"
+    
+    # Primary key
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        doc="Unique identifier for the run",
+    )
+    
+    # Foreign keys
+    job_search_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("job_searches.id", ondelete="CASCADE"),
+        nullable=True,  # Nullable initially for migration
+        doc="Reference to the job search workflow",
+    )
+    
+    # Status tracking
+    status = Column(
+        String(255),
+        nullable=False,
+        default="pending",
+        doc="Run status: pending, processing, completed, failed",
+    )
+    error_message = Column(
+        Text,
+        nullable=True,
+        doc="Error message if run failed",
+    )
+    
+    # Completion counters
+    total_matched_jobs = Column(
+        Integer,
+        default=0,
+        nullable=False,
+        doc="Total number of matched jobs in this run",
+    )
+    research_completed_count = Column(
+        Integer,
+        default=0,
+        nullable=False,
+        doc="Number of matched jobs with completed research",
+    )
+    fabrication_completed_count = Column(
+        Integer,
+        default=0,
+        nullable=False,
+        doc="Number of matched jobs with completed fabrication",
+    )
+    research_failed_count = Column(
+        Integer,
+        default=0,
+        nullable=False,
+        doc="Number of matched jobs with failed research",
+    )
+    fabrication_failed_count = Column(
+        Integer,
+        default=0,
+        nullable=False,
+        doc="Number of matched jobs with failed fabrication",
+    )
+    
+    # Completion timestamps
+    completed_at = Column(
+        DateTime,
+        nullable=True,
+        doc="Timestamp when the run completed (all matched jobs finished)",
+    )
+    
+    # Delivery tracking
+    delivery_triggered = Column(
+        Boolean,
+        default=False,
+        nullable=False,
+        doc="Whether delivery has been triggered for this run",
+    )
+    delivery_triggered_at = Column(
+        DateTime,
+        nullable=True,
+        doc="Timestamp when delivery was triggered",
+    )
+    
+    # Timestamps
+    created_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+        doc="Timestamp when the run was created",
+    )
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+        doc="Timestamp when the run was last updated",
+    )
+    
+    # Relationships
+    job_search = relationship("JobSearch", backref="runs")
 
 class JobSearch(Base):
     """Model representing a job search workflow run.
@@ -311,6 +417,12 @@ class MatchedJob(Base):
         unique=True,
         doc="Reference to the job posting",
     )
+    run_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("runs.id", ondelete="CASCADE"),
+        nullable=True,  # Nullable initially for migration
+        doc="Reference to the run that processes this matched job",
+    )
 
     # Match details from AI screening
     is_match = Column(
@@ -337,6 +449,54 @@ class MatchedJob(Base):
         doc="Application link with 'via' and 'link' keys",
     )
 
+    # Research status tracking
+    research_status = Column(
+        String(50),
+        nullable=False,
+        default="pending",
+        doc="Research status: pending, processing, completed, failed",
+    )
+    research_attempts = Column(
+        Integer,
+        default=0,
+        nullable=False,
+        doc="Number of research attempts made",
+    )
+    research_error = Column(
+        Text,
+        nullable=True,
+        doc="Error message if research failed",
+    )
+    research_completed_at = Column(
+        DateTime,
+        nullable=True,
+        doc="Timestamp when research was completed",
+    )
+    
+    # Fabrication status tracking
+    fabrication_status = Column(
+        String(50),
+        nullable=False,
+        default="pending",
+        doc="Fabrication status: pending, processing, completed, failed",
+    )
+    fabrication_attempts = Column(
+        Integer,
+        default=0,
+        nullable=False,
+        doc="Number of fabrication attempts made",
+    )
+    fabrication_error = Column(
+        Text,
+        nullable=True,
+        doc="Error message if fabrication failed",
+    )
+    fabrication_completed_at = Column(
+        DateTime,
+        nullable=True,
+        doc="Timestamp when fabrication was completed",
+    )
+    
     # Timestamps
     created_at = Column(
         DateTime,
@@ -355,6 +515,7 @@ class MatchedJob(Base):
     # Relationships
     job_search = relationship("JobSearch", back_populates="matched_jobs")
     job_posting = relationship("JobPosting", back_populates="matched_job")
+    run = relationship("Run", backref="matched_jobs")
 
     @classmethod
     def from_screening_output(
@@ -565,3 +726,121 @@ class CompanyResearch(Base):
 
     # Relationship
     job_posting = relationship("JobPosting", backref="company_research")
+
+
+class CoverLetter(Base):
+    """CoverLetter model to store fabricated cover letter results.
+    
+    Stores the topic and complete content of cover letters generated
+    for matched jobs. Each matched job can have one cover letter.
+    """
+    
+    __tablename__ = "cover_letters"
+    
+    # Primary key
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        doc="Unique identifier for the cover letter",
+    )
+    
+    # Foreign key
+    matched_job_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("matched_jobs.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,  # One cover letter per matched job
+        doc="Reference to the matched job",
+    )
+    
+    # Cover letter content
+    topic = Column(
+        JSON,
+        nullable=False,
+        doc="Cover letter topic and summary (stored as JSON from CoverLetterTopic)",
+    )
+    
+    content = Column(
+        JSON,
+        nullable=False,
+        doc="Complete cover letter content (stored as JSON from CoverLetterContent)",
+    )
+    
+    # Timestamps
+    created_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        doc="Timestamp when the cover letter was created",
+    )
+    
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        doc="Timestamp when the cover letter was last updated",
+    )
+    
+    # Relationship
+    matched_job = relationship("MatchedJob", backref="cover_letter")
+
+
+class Artifact(Base):
+    """Unified model to store fabricated application materials for matched jobs.
+    
+    Stores both cover letter (JSON for Nylas) and CV (PDF URL) in a single row per matched job.
+    """
+    
+    __tablename__ = "artifacts"
+    
+    # Primary key
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        doc="Unique identifier for the artifact",
+    )
+    
+    # Foreign key
+    matched_job_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("matched_jobs.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,  # One artifact record per matched job
+        doc="Reference to the matched job",
+    )
+    
+    # Cover letter data (JSON object passed to Nylas)
+    cover_letter = Column(
+        JSON,
+        nullable=True,
+        doc="Cover letter data as JSON (topic + content) - ready to pass to Nylas",
+    )
+    
+    # CV data (contains PDF URL)
+    cv = Column(
+        JSON,
+        nullable=True,
+        doc="CV data containing PDF URL: {'pdf_url': 'https://...'}",
+    )
+    
+    # Timestamps
+    created_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        doc="Timestamp when the artifact was created",
+    )
+    
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        doc="Timestamp when the artifact was last updated",
+    )
+    
+    # Relationship
+    matched_job = relationship("MatchedJob", backref="artifact", uselist=False)

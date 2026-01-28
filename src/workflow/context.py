@@ -37,6 +37,9 @@ class WorkflowContext:
     hl: str = "en"
     gl: str = "us"
     
+    # ========== Run Tracking ==========
+    run_id: Optional[uuid.UUID] = None
+    
     # ========== Discovery Step Output ==========
     jobs: List[JobResult] = field(default_factory=list)
     job_search_id: Optional[uuid.UUID] = None
@@ -124,5 +127,33 @@ class WorkflowContext:
             return False
         if not self.jobs:
             self.add_error("Jobs list is required for matching step")
+            return False
+        return True
+    
+    def validate_for_research(self) -> bool:
+        """Validate that context has required fields for research step.
+        
+        Returns:
+            True if valid, False otherwise (errors added to context)
+        """
+        if not self.run_id:
+            self.add_error("Run ID is required for research step")
+            return False
+        if not self.matched_results:
+            self.add_error("Matched results are required for research step")
+            return False
+        return True
+    
+    def validate_for_fabrication(self) -> bool:
+        """Validate that context has required fields for fabrication step.
+        
+        Returns:
+            True if valid, False otherwise (errors added to context)
+        """
+        if not self.run_id:
+            self.add_error("Run ID is required for fabrication step")
+            return False
+        if not self.matched_results:
+            self.add_error("Matched results are required for fabrication step")
             return False
         return True

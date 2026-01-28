@@ -22,7 +22,7 @@ project_root = Path(__file__).parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from src.database.models import MatchedJob, JobPosting, CompanyResearch
+from src.database.models import MatchedJob, JobPosting, CompanyResearch, Run
 from src.database.repository import GenericRepository
 from src.database.session import db_session
 from sqlalchemy.orm import Session
@@ -39,118 +39,206 @@ load_dotenv()
 exa = Exa(api_key=os.getenv("EXA_API_KEY"))
 
 
-def research_company_for_job(job_posting: JobPosting, use_streaming: bool = False) -> dict:
+def research_company_for_job(
+    session: Session,
+    matched_job: MatchedJob,
+    job_posting: JobPosting,
+    use_streaming: bool = False,
+    max_retries: int = 3,
+) -> Optional[dict]:
     """
     Research company information for a job posting using Exa's Answer API.
+    Updates MatchedJob and Run status tracking.
     
     Args:
+        session: SQLAlchemy database session
+        matched_job: The MatchedJob object to update status for
         job_posting: The JobPosting object containing company and job details
         use_streaming: If True, use stream_answer() for real-time results; otherwise use answer()
+        max_retries: Maximum number of retry attempts (default: 3)
     
     Returns:
-        dict with 'answer' (str) and 'citations' (list) keys
+        dict with 'answer' (str) and 'citations' (list) keys if successful, None if failed
     """
-    # Construct research query
-    # EXPLANATION: We ask Exa to research multiple aspects in one query:
-    # - Company background and history
-    # - Team structure and culture
-    # - Candidate expectations (from job posting and company culture)
-    # - Current activities/projects (recent news, product launches, etc.)
-    query = f"""Research {job_posting.company_name}, a company hiring for the position of {job_posting.title}. 
-    
-    Please provide comprehensive information about:
-    1. Company background: What does this company do? What is their mission and history?
-    2. Team and culture: What is the team structure like? What is the company culture?
-    3. Candidate expectations: Based on the job posting and company culture, what do they expect from candidates for this role?
-    4. Current activities: What are they currently working on? Any recent news, product launches, or major initiatives?
-    
-    Focus on information that would help a candidate prepare for an interview with this company.
-    """
-    
-    print(f"\n{'='*80}")
-    print(f"RESEARCHING: {job_posting.company_name} - {job_posting.title}")
-    print(f"{'='*80}\n")
-    print(f"Query: {query[:200]}...\n")
-    
-    # EXPLANATION: Exa's stream_answer() returns chunks that can be:
-    # 1. String chunks (the answer text itself)
-    # 2. AnswerResult objects with answer, citations, etc.
-    # We need to handle both types
-    
-    answer_text = ""
-    citations = []
-    
-    # EXPLANATION: Exa's stream_answer() returns StreamChunk objects
-    # Each StreamChunk has:
-    # - content: The text content of this chunk (may be empty for some chunks)
-    # - citations: List of citations (usually populated in final chunks)
-    # - has_data: Boolean indicating if chunk has data
-    
-    if use_streaming:
-        # EXPLANATION: stream_answer() returns a generator that yields answer chunks in real-time
-        # Useful for long-running queries where you want to show progress
-        print("Using streaming mode - results will appear incrementally:\n")
+    # Check if research already exists
+    existing_research = get_research_by_job_posting(session, str(job_posting.id))
+    if existing_research:
+        # Research already exists, mark as completed if not already
+        was_completed = matched_job.research_status == "completed"
+        matched_job.research_status = "completed"
+        matched_job.research_completed_at = datetime.utcnow()
+        matched_job.research_error = None
         
-        for chunk in exa.stream_answer(query, text=True):
-            # EXPLANATION: StreamChunk objects have a 'content' attribute with the text
-            if hasattr(chunk, 'content') and chunk.content:
-                answer_text += chunk.content
-                print(chunk.content, end='', flush=True)
-            
-            # Citations are typically included in later chunks
-            if hasattr(chunk, 'citations') and chunk.citations:
-                citations = chunk.citations
+        # Update run counters only if status changed from non-completed to completed
+        if matched_job.run_id and not was_completed:
+            run = session.query(Run).filter_by(id=matched_job.run_id).first()
+            if run:
+                run.research_completed_count += 1
+                session.commit()
         
-        print("\n")  # New line after streaming completes
-        
-    else:
-        # EXPLANATION: For non-streaming, we use stream_answer() and collect all chunks silently
-        # The Exa SDK's answer() method may not be available, so we use stream_answer()
-        # and accumulate the results without printing incrementally
-        print("Using standard mode - fetching complete answer...\n")
-        
-        chunk_count = 0
-        for chunk in exa.stream_answer(query, text=True):
-            chunk_count += 1
-            # EXPLANATION: Extract content from StreamChunk objects
-            if hasattr(chunk, 'content') and chunk.content:
-                answer_text += chunk.content
-            
-            # Extract citations if available (usually in final chunks)
-            if hasattr(chunk, 'citations') and chunk.citations:
-                citations = chunk.citations
-        
-        if chunk_count == 0:
-            print("   ⚠️  Warning: No chunks received from Exa API")
-            print("   → This might mean:")
-            print("     1. The company is too small/local and Exa has no information")
-            print("     2. There was an API error (check API key and quota)")
-            print("     3. The query needs refinement")
+        session.commit()
+        print(f"   ✓ Research already exists, using existing research")
+        return {
+            "answer": existing_research.research_results,
+            "citations": existing_research.citations or []
+        }
     
-    # Display results with inline explanations
-    print(f"\n{'='*80}")
-    print("RESEARCH RESULTS")
-    print(f"{'='*80}\n")
-    print(answer_text)
+    # Update status to processing
+    matched_job.research_status = "processing"
+    matched_job.research_attempts += 1
+    session.commit()
     
-    if citations:
+    try:
+        # Construct research query
+        # EXPLANATION: We ask Exa to research multiple aspects in one query:
+        # - Company background and history
+        # - Team structure and culture
+        # - Candidate expectations (from job posting and company culture)
+        # - Current activities/projects (recent news, product launches, etc.)
+        query = f"""Research {job_posting.company_name}, a company hiring for the position of {job_posting.title}. 
+    
+Please provide comprehensive information about:
+1. Company background: What does this company do? What is their mission and history?
+2. Team and culture: What is the team structure like? What is the company culture?
+3. Candidate expectations: Based on the job posting and company culture, what do they expect from candidates for this role?
+4. Current activities: What are they currently working on? Any recent news, product launches, or major initiatives?
+
+Focus on information that would help a candidate prepare for an interview with this company.
+"""
+        
         print(f"\n{'='*80}")
-        print(f"SOURCES ({len(citations)} citations)")
+        print(f"RESEARCHING: {job_posting.company_name} - {job_posting.title}")
         print(f"{'='*80}\n")
-        # EXPLANATION: Citations show where the information came from
-        # This helps verify credibility and allows deeper research if needed
-        for i, citation in enumerate(citations, 1):
-            # EXPLANATION: Citations are AnswerResult objects with url and title attributes
-            url = getattr(citation, 'url', 'N/A')
-            title = getattr(citation, 'title', None)
-            print(f"{i}. {url}")
-            if title:
-                print(f"   Title: {title}")
+        print(f"Query: {query[:200]}...\n")
+        
+        # EXPLANATION: Exa's stream_answer() returns chunks that can be:
+        # 1. String chunks (the answer text itself)
+        # 2. AnswerResult objects with answer, citations, etc.
+        # We need to handle both types
+        
+        answer_text = ""
+        citations = []
+        
+        # EXPLANATION: Exa's stream_answer() returns StreamChunk objects
+        # Each StreamChunk has:
+        # - content: The text content of this chunk (may be empty for some chunks)
+        # - citations: List of citations (usually populated in final chunks)
+        # - has_data: Boolean indicating if chunk has data
+        
+        if use_streaming:
+            # EXPLANATION: stream_answer() returns a generator that yields answer chunks in real-time
+            # Useful for long-running queries where you want to show progress
+            print("Using streaming mode - results will appear incrementally:\n")
+            
+            for chunk in exa.stream_answer(query, text=True):
+                # EXPLANATION: StreamChunk objects have a 'content' attribute with the text
+                if hasattr(chunk, 'content') and chunk.content:
+                    answer_text += chunk.content
+                    print(chunk.content, end='', flush=True)
+                
+                # Citations are typically included in later chunks
+                if hasattr(chunk, 'citations') and chunk.citations:
+                    citations = chunk.citations
+            
+            print("\n")  # New line after streaming completes
+            
+        else:
+            # EXPLANATION: For non-streaming, we use stream_answer() and collect all chunks silently
+            # The Exa SDK's answer() method may not be available, so we use stream_answer()
+            # and accumulate the results without printing incrementally
+            print("Using standard mode - fetching complete answer...\n")
+            
+            chunk_count = 0
+            for chunk in exa.stream_answer(query, text=True):
+                chunk_count += 1
+                # EXPLANATION: Extract content from StreamChunk objects
+                if hasattr(chunk, 'content') and chunk.content:
+                    answer_text += chunk.content
+                
+                # Extract citations if available (usually in final chunks)
+                if hasattr(chunk, 'citations') and chunk.citations:
+                    citations = chunk.citations
+            
+            if chunk_count == 0:
+                print("   ⚠️  Warning: No chunks received from Exa API")
+                print("   → This might mean:")
+                print("     1. The company is too small/local and Exa has no information")
+                print("     2. There was an API error (check API key and quota)")
+                print("     3. The query needs refinement")
+        
+        # Display results with inline explanations
+        print(f"\n{'='*80}")
+        print("RESEARCH RESULTS")
+        print(f"{'='*80}\n")
+        print(answer_text)
+        
+        if citations:
+            print(f"\n{'='*80}")
+            print(f"SOURCES ({len(citations)} citations)")
+            print(f"{'='*80}\n")
+            # EXPLANATION: Citations show where the information came from
+            # This helps verify credibility and allows deeper research if needed
+            for i, citation in enumerate(citations, 1):
+                # EXPLANATION: Citations are AnswerResult objects with url and title attributes
+                url = getattr(citation, 'url', 'N/A')
+                title = getattr(citation, 'title', None)
+                print(f"{i}. {url}")
+                if title:
+                    print(f"   Title: {title}")
+        
+        # Save research results to database
+        saved_research = save_research_results(
+            session=session,
+            job_posting_id=str(job_posting.id),
+            company_name=job_posting.company_name,
+            research_results=answer_text,
+            citations=citations
+        )
+        
+        # Update matched job status (only increment counter if status changed)
+        was_completed = matched_job.research_status == "completed"
+        matched_job.research_status = "completed"
+        matched_job.research_completed_at = datetime.utcnow()
+        matched_job.research_error = None
+        
+        # Update run counters only if status changed from non-completed to completed
+        if matched_job.run_id and not was_completed:
+            run = session.query(Run).filter_by(id=matched_job.run_id).first()
+            if run:
+                run.research_completed_count += 1
+                session.commit()
+        
+        session.commit()
+        
+        return {
+            "answer": answer_text,
+            "citations": citations
+        }
     
-    return {
-        "answer": answer_text,
-        "citations": citations
-    }
+    except Exception as e:
+        # Handle failure
+        error_msg = str(e)
+        matched_job.research_status = "failed" if matched_job.research_attempts >= max_retries else "pending"
+        matched_job.research_error = error_msg
+        
+        # Update run counters (only increment failed count if marking as failed for first time)
+        was_failed = matched_job.research_status == "failed"
+        if matched_job.run_id and matched_job.research_attempts >= max_retries and not was_failed:
+            run = session.query(Run).filter_by(id=matched_job.run_id).first()
+            if run:
+                run.research_failed_count += 1
+                session.commit()
+        
+        session.commit()
+        
+        print(f"   ❌ Research failed (attempt {matched_job.research_attempts}/{max_retries}): {error_msg}")
+        
+        if matched_job.research_attempts < max_retries:
+            print(f"   → Will retry later")
+        else:
+            print(f"   → Max retries exceeded, marking as failed")
+        
+        return None
 
 
 # ============================================================================
@@ -276,6 +364,99 @@ def get_research_by_company_name(
     return session.query(CompanyResearch).filter_by(
         company_name=company_name
     ).all()
+
+
+def research_matched_jobs_for_run(
+    session: Session,
+    run_id: str,
+    use_streaming: bool = False,
+    max_retries: int = 3,
+) -> Dict[str, int]:
+    """
+    Research all matched jobs for a run.
+    
+    Args:
+        session: SQLAlchemy database session
+        run_id: UUID of the run (as string)
+        use_streaming: If True, use streaming mode for research
+        max_retries: Maximum number of retry attempts per job
+    
+    Returns:
+        Dictionary with counts: {'successful': int, 'failed': int, 'total': int}
+    """
+    import uuid
+    
+    # Get all matched jobs for this run
+    matched_jobs = session.query(MatchedJob).filter_by(
+        run_id=uuid.UUID(run_id)
+    ).all()
+    
+    if not matched_jobs:
+        print(f"No matched jobs found for run {run_id}")
+        return {'successful': 0, 'failed': 0, 'total': 0}
+    
+    print(f"\n{'='*80}")
+    print(f"RESEARCHING {len(matched_jobs)} MATCHED JOBS FOR RUN {run_id}")
+    print(f"{'='*80}\n")
+    
+    successful = 0
+    failed = 0
+    
+    for i, matched_job in enumerate(matched_jobs, 1):
+        print(f"\n[{i}/{len(matched_jobs)}] Processing matched job {matched_job.id}")
+        
+        # Check if already completed (but still process to ensure status is correct)
+        if matched_job.research_status == "completed":
+            print("   ⏭️  Research already completed, skipping")
+            successful += 1
+            continue
+        
+        # Skip if max retries exceeded
+        if matched_job.research_attempts >= max_retries and matched_job.research_status == "failed":
+            print("   ⏭️  Max retries exceeded, skipping")
+            failed += 1
+            continue
+        
+        # Get job posting
+        job_posting_repo = GenericRepository(session, JobPosting)
+        job_posting = job_posting_repo.get(str(matched_job.job_posting_id))
+        
+        if not job_posting:
+            print(f"   ❌ Job posting {matched_job.job_posting_id} not found")
+            matched_job.research_status = "failed"
+            matched_job.research_error = f"Job posting {matched_job.job_posting_id} not found"
+            matched_job.research_attempts += 1
+            failed += 1
+            session.commit()
+            continue
+        
+        # Perform research
+        result = research_company_for_job(
+            session=session,
+            matched_job=matched_job,
+            job_posting=job_posting,
+            use_streaming=use_streaming,
+            max_retries=max_retries,
+        )
+        
+        if result:
+            successful += 1
+            print(f"   ✓ Research completed successfully")
+        else:
+            failed += 1
+    
+    print(f"\n{'='*80}")
+    print(f"RESEARCH SUMMARY")
+    print(f"{'='*80}")
+    print(f"Total: {len(matched_jobs)}")
+    print(f"Successful: {successful}")
+    print(f"Failed: {failed}")
+    
+    return {
+        'successful': successful,
+        'failed': failed,
+        'total': len(matched_jobs)
+    }
 
 
 if __name__ == "__main__":
