@@ -7,10 +7,8 @@ from pydantic_ai import Agent
 from pydantic import BaseModel, Field
 from src.discovery.serpapi_models import JobResult
 from dotenv import load_dotenv
-import nest_asyncio
 
 load_dotenv()
-nest_asyncio.apply()
 
 # Optional database imports - only import if needed
 try:

@@ -1,7 +1,8 @@
 """Generic repository pattern for database operations."""
 
 import uuid
-from typing import Generic, TypeVar, Type, List, Optional, TYPE_CHECKING
+from typing import Generic, TypeVar, Type, List, Optional, Union, TYPE_CHECKING
+from uuid import UUID
 
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
@@ -65,11 +66,11 @@ class GenericRepository(Generic[T]):
         self.session.refresh(obj)   # Refresh to get database-generated values
         return obj
     
-    def get(self, id: str) -> Optional[T]:
+    def get(self, id: Union[str, UUID]) -> Optional[T]:
         """Get a record by ID.
         
         Args:
-            id: Primary key ID
+            id: Primary key ID (can be string or UUID)
             
         Returns:
             Model instance or None if not found

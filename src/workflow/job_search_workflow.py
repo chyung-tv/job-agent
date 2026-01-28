@@ -1,28 +1,42 @@
 """Job search workflow orchestrator."""
 
-import uuid
-import json
 import logging
-from datetime import datetime
-from typing import Optional
-
-from sqlalchemy.orm import Session
+from typing import TYPE_CHECKING
 
 from src.workflow.base_context import JobSearchWorkflowContext
+from src.workflow.base_workflow import BaseWorkflow
 from src.workflow.nodes.discovery_node import DiscoveryNode
-from src.workflow.nodes.profiling_node import ProfilingNode
+from src.workflow.nodes.profile_retrieval_node import ProfileRetrievalNode
 from src.workflow.nodes.matching_node import MatchingNode
 from src.workflow.nodes.research_node import ResearchNode
 from src.workflow.nodes.fabrication_node import FabricationNode
 from src.workflow.nodes.completion_node import CompletionNode
 from src.workflow.nodes.delivery_node import DeliveryNode
-from src.database import db_session, GenericRepository, Run, WorkflowExecution
 
 logger = logging.getLogger(__name__)
 
 
-class JobSearchWorkflow:
-    """Workflow orchestrator for job search pipeline."""
+class JobSearchWorkflow(BaseWorkflow):
+    """Workflow orchestrator for job search pipeline.
+    
+    This workflow provides flexible node execution with conditional routing.
+    You can customize the flow by implementing custom logic in the run() method.
+    
+    Example:
+        async def run(self, context: Context) -> Context:
+            context = await self._execute_node(self.discovery_node, context)
+            
+            if context.has_errors():
+                return context
+            
+            # Conditional routing based on context state
+            if some_condition:
+                context = await self._execute_node(self.nodeA, context)
+            else:
+                context = await self._execute_node(self.nodeB, context)
+            
+            return context
+    """
     
     class Context(JobSearchWorkflowContext):
         """Workflow-specific context with additional validations."""
@@ -30,123 +44,25 @@ class JobSearchWorkflow:
     
     def __init__(self):
         """Initialize the workflow with nodes."""
-        self.nodes = [
-            DiscoveryNode(),
-            ProfilingNode(),
-            MatchingNode(),
-            ResearchNode(),
-            FabricationNode(),
-            CompletionNode(),
-            DeliveryNode(),
-        ]
-        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
-    
-    def _create_run(self, context: Context) -> uuid.UUID:
-        """Create a new run record in the database.
+        super().__init__(workflow_type="job_search")
         
-        Args:
-            context: The workflow context
-            
-        Returns:
-            Created run ID
-        """
-        session_gen = db_session()
-        session = next(session_gen)
-        try:
-            run = Run(status="processing")
-            session.add(run)
-            session.commit()
-            session.refresh(run)
-            context.run_id = run.id
-            self.logger.info(f"Created run with ID: {run.id}")
-            return run.id
-        except Exception as e:
-            session.rollback()
-            self.logger.error(f"Failed to create run: {e}")
-            raise
-        finally:
-            try:
-                next(session_gen, None)
-            except StopIteration:
-                pass
-    
-    def _log_workflow_start(self, context: Context) -> uuid.UUID:
-        """Log workflow execution start.
-        
-        Args:
-            context: The workflow context
-            
-        Returns:
-            WorkflowExecution ID
-        """
-        session_gen = db_session()
-        session = next(session_gen)
-        try:
-            execution = WorkflowExecution(
-                run_id=context.run_id,
-                workflow_type="job_search",
-                status="processing",
-                context_snapshot=json.loads(context.model_dump_json()),
-                started_at=datetime.utcnow(),
-            )
-            session.add(execution)
-            session.commit()
-            session.refresh(execution)
-            self.logger.info(f"Created workflow execution record: {execution.id}")
-            return execution.id
-        except Exception as e:
-            session.rollback()
-            self.logger.error(f"Failed to log workflow start: {e}")
-            raise
-        finally:
-            try:
-                next(session_gen, None)
-            except StopIteration:
-                pass
-    
-    def _update_workflow_execution(
-        self,
-        execution_id: uuid.UUID,
-        context: Context,
-        current_node: Optional[str] = None,
-        status: Optional[str] = None,
-        error_message: Optional[str] = None,
-    ) -> None:
-        """Update workflow execution record.
-        
-        Args:
-            execution_id: WorkflowExecution ID
-            context: The workflow context
-            current_node: Name of current node
-            status: Execution status
-            error_message: Error message if any
-        """
-        session_gen = db_session()
-        session = next(session_gen)
-        try:
-            execution = session.query(WorkflowExecution).filter_by(id=execution_id).first()
-            if execution:
-                execution.context_snapshot = json.loads(context.model_dump_json())
-                if current_node:
-                    execution.current_node = current_node
-                if status:
-                    execution.status = status
-                if error_message:
-                    execution.error_message = error_message
-                if status == "completed" or status == "failed":
-                    execution.completed_at = datetime.utcnow()
-                execution.updated_at = datetime.utcnow()
-                session.commit()
-        except Exception as e:
-            self.logger.warning(f"Failed to update workflow execution: {e}")
-        finally:
-            try:
-                next(session_gen, None)
-            except StopIteration:
-                pass
+        # Initialize nodes as named attributes for easy access and conditional routing
+        self.discovery_node = DiscoveryNode()
+        self.profile_retrieval_node = ProfileRetrievalNode()
+        self.matching_node = MatchingNode()
+        self.research_node = ResearchNode()
+        self.fabrication_node = FabricationNode()
+        self.completion_node = CompletionNode()
+        self.delivery_node = DeliveryNode()
     
     async def run(self, context: Context) -> Context:
-        """Execute the workflow with all nodes.
+        """Execute the workflow with flexible node execution.
+        
+        This method allows you to:
+        - Execute nodes in any order
+        - Add conditional logic based on context state
+        - Route to different nodes based on conditions
+        - Skip nodes when appropriate
         
         Args:
             context: The workflow context with input parameters
@@ -173,49 +89,64 @@ class JobSearchWorkflow:
             self.logger.warning(f"Failed to log workflow start: {e}")
             # Continue execution even if logging fails
         
-        # Execute nodes sequentially
-        for i, node in enumerate(self.nodes):
-            node_name = node.__class__.__name__
-            self.logger.info(f"Executing node {i+1}/{len(self.nodes)}: {node_name}")
+        try:
+            # Execute nodes with flexible flow
+            # You can add conditional logic here based on context state
             
-            try:
-                # Update execution record with current node
-                if execution_id:
-                    self._update_workflow_execution(execution_id, context, current_node=node_name)
-                
-                # Execute node
-                context = await node.run(context)
-                
-                # Log errors if any
-                if context.has_errors():
-                    self.logger.warning(f"Node {node_name} completed with errors: {context.errors}")
-                
-            except Exception as e:
-                error_msg = f"Node {node_name} failed: {e}"
-                self.logger.error(error_msg)
-                context.add_error(error_msg)
-                
-                # Update execution record with error
-                if execution_id:
-                    self._update_workflow_execution(
-                        execution_id,
-                        context,
-                        current_node=node_name,
-                        status="failed",
-                        error_message=error_msg,
-                    )
-                
-                # Continue execution (simple error handling for now)
-                continue
-        
-        # Update execution record as completed
-        if execution_id:
-            final_status = "failed" if context.has_errors() else "completed"
-            self._update_workflow_execution(
-                execution_id,
-                context,
-                status=final_status,
-            )
+            # Step 1: Profile Retrieval - Load user profile from database
+            # Note: Profile must be created first using ProfilingWorkflow
+            context = await self._execute_node(self.profile_retrieval_node, context)
+            if context.has_errors():
+                self.logger.warning("Profile retrieval failed, stopping workflow")
+                return context
+            
+            # Step 2: Discovery - Find jobs
+            context = await self._execute_node(self.discovery_node, context)
+            if context.has_errors():
+                self.logger.warning("Discovery failed, stopping workflow")
+                return context
+            
+            # Step 3: Matching - Match jobs against profile
+            context = await self._execute_node(self.matching_node, context)
+            if context.has_errors():
+                self.logger.warning("Matching failed, stopping workflow")
+                return context
+            
+            # Conditional: Only proceed if we have matches
+            if not context.matched_results:
+                self.logger.info("No matches found, skipping research and fabrication")
+                return context
+            
+            # Step 4: Research - Research companies for matched jobs
+            context = await self._execute_node(self.research_node, context)
+            if context.has_errors():
+                self.logger.warning("Research failed, stopping workflow")
+                return context
+            
+            # Step 5: Fabrication - Generate application materials
+            context = await self._execute_node(self.fabrication_node, context)
+            if context.has_errors():
+                self.logger.warning("Fabrication failed, stopping workflow")
+                return context
+            
+            # Step 6: Completion - Check if materials are complete
+            context = await self._execute_node(self.completion_node, context)
+            if context.has_errors():
+                self.logger.warning("Completion check failed, stopping workflow")
+                return context
+            
+            # Step 7: Delivery - Send application materials
+            context = await self._execute_node(self.delivery_node, context)
+            
+        finally:
+            # Update execution record as completed
+            if execution_id:
+                final_status = "failed" if context.has_errors() else "completed"
+                self._update_workflow_execution(
+                    context,
+                    status=final_status,
+                )
         
         self.logger.info("Job search workflow completed")
+        self.logger.info(f"Execution path: {' -> '.join(self.get_execution_path())}")
         return context

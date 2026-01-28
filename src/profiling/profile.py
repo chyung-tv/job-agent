@@ -5,12 +5,10 @@ from typing import Optional, TYPE_CHECKING
 from pydantic_ai import Agent
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
-import nest_asyncio
 
 from .pdf_parser import PDFParser
 
 load_dotenv()
-nest_asyncio.apply()
 
 # Optional database imports
 try:

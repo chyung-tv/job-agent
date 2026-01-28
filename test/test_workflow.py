@@ -12,7 +12,8 @@ if str(project_root) not in sys.path:
 from src.workflow.job_search_workflow import JobSearchWorkflow
 from src.workflow.base_context import JobSearchWorkflowContext
 from src.workflow.nodes.discovery_node import DiscoveryNode
-from src.workflow.nodes.profiling_node import ProfilingNode
+from src.workflow.profiling_workflow import ProfilingWorkflow
+from src.workflow.profiling_context import ProfilingWorkflowContext
 from src.workflow.nodes.matching_node import MatchingNode
 from src.workflow.nodes.research_node import ResearchNode
 from src.workflow.nodes.fabrication_node import FabricationNode
@@ -64,26 +65,27 @@ async def test_discovery_node():
     return result
 
 
-async def test_profiling_node():
-    """Test ProfilingNode separately."""
+async def test_profiling_workflow():
+    """Test ProfilingWorkflow separately."""
     print("\n" + "=" * 80)
-    print("TEST: ProfilingNode")
+    print("TEST: ProfilingWorkflow")
     print("=" * 80)
 
-    # Use default data directory or provide pdf_paths
-    context = JobSearchWorkflowContext(
-        query="test",
-        location="test",
+    # Create profiling workflow context with user input
+    context = ProfilingWorkflow.Context(
+        name="Test User",
+        email="test@example.com",
+        basic_info="Software engineer with 5 years of experience",
         data_dir=Path(__file__).parent.parent / "data",
     )
 
-    node = ProfilingNode()
-    result = await node.run(context)
+    workflow = ProfilingWorkflow()
+    result = await workflow.run(context)
 
     print(f"\n[RESULT]")
-    print(f"  - Profile cached: {result.profile_was_cached}")
-    print(f"  - Profile name: {result.profile_name}")
-    print(f"  - Profile email: {result.profile_email}")
+    print(f"  - Profile ID: {result.profile_id}")
+    print(f"  - Profile name: {result.name}")
+    print(f"  - Profile email: {result.email}")
     print(
         f"  - Profile length: {len(result.user_profile) if result.user_profile else 0} chars"
     )
@@ -98,8 +100,8 @@ async def test_matching_node():
     print("TEST: MatchingNode")
     print("=" * 80)
 
-    # First need jobs and profile - can use discovery and profiling nodes
-    print("[SETUP] Running discovery and profiling nodes first...")
+    # First need jobs and profile - can use discovery and profiling workflow
+    print("[SETUP] Running discovery and profiling workflow first...")
     discovery_context = JobSearchWorkflowContext(
         query="software engineer",
         location="Hong Kong",
@@ -108,13 +110,14 @@ async def test_matching_node():
     discovery_node = DiscoveryNode()
     discovery_result = await discovery_node.run(discovery_context)
 
-    profiling_context = JobSearchWorkflowContext(
-        query="test",
-        location="test",
+    # Create profile first using ProfilingWorkflow
+    profiling_context = ProfilingWorkflow.Context(
+        name="Test User",
+        email="test@example.com",
         data_dir=Path(__file__).parent.parent / "data",
     )
-    profiling_node = ProfilingNode()
-    profiling_result = await profiling_node.run(profiling_context)
+    profiling_workflow = ProfilingWorkflow()
+    profiling_result = await profiling_workflow.run(profiling_context)
 
     # Now test matching
     context = JobSearchWorkflowContext(
@@ -590,7 +593,7 @@ async def run_all_node_tests():
     print("=" * 80)
 
     await test_discovery_node()
-    await test_profiling_node()
+    await test_profiling_workflow()
     await test_matching_node()
     # Note: Research, Fabrication, Completion, and Delivery nodes
     # require previous steps to be completed, so they may skip if no data exists
@@ -604,7 +607,7 @@ def display_menu():
     print("\nSelect a test to run:")
     print()
     print("  1. Discovery Node - Test job discovery")
-    print("  2. Profiling Node - Test user profile extraction")
+    print("  2. Profiling Workflow - Test user profile creation")
     print("  3. Matching Node - Test job matching")
     print("  4. Research Node - Test company research")
     print("  5. Fabrication Node - Test cover letter/CV generation")
@@ -629,7 +632,7 @@ async def interactive_main():
         elif choice == "1":
             await test_discovery_node()
         elif choice == "2":
-            await test_profiling_node()
+            await test_profiling_workflow()
         elif choice == "3":
             await test_matching_node()
         elif choice == "4":
@@ -703,7 +706,7 @@ async def main():
     elif args.test == "discovery":
         await test_discovery_node()
     elif args.test == "profiling":
-        await test_profiling_node()
+        await test_profiling_workflow()
     elif args.test == "matching":
         await test_matching_node()
     elif args.test == "research":

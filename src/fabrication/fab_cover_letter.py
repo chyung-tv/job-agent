@@ -18,10 +18,8 @@ from pydantic_ai import Agent
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from dotenv import load_dotenv
-import nest_asyncio
 
 load_dotenv()
-nest_asyncio.apply()
 
 from src.database.models import (
     MatchedJob,

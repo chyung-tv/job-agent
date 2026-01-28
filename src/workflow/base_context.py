@@ -1,7 +1,6 @@
 """Base context classes for workflow state management."""
 
 from typing import Optional, List
-from pathlib import Path
 from datetime import datetime
 from uuid import UUID
 from pydantic import BaseModel, Field
@@ -58,8 +57,7 @@ class JobSearchWorkflowContext(BaseContext):
     location: str
     num_results: int = 30
     max_screening: int = 5
-    pdf_paths: Optional[List[Path]] = None
-    data_dir: Optional[Path] = None
+    profile_id: Optional[UUID] = None
     google_domain: str = "google.com"
     hl: str = "en"
     gl: str = "us"
@@ -68,11 +66,9 @@ class JobSearchWorkflowContext(BaseContext):
     jobs: List[JobResult] = Field(default_factory=list)
     job_search_id: Optional[UUID] = None
     
-    # ========== Profiling Step Output ==========
+    # ========== Profile Retrieval Output ==========
     user_profile: Optional[str] = None
     profile_was_cached: bool = False
-    profile_name: Optional[str] = None
-    profile_email: Optional[str] = None
     
     # ========== Matching Step Output ==========
     matched_results: List[JobScreeningOutput] = Field(default_factory=list)
@@ -105,5 +101,8 @@ class JobSearchWorkflowContext(BaseContext):
             return False
         if not self.location or not self.location.strip():
             self.add_error("Location is required")
+            return False
+        if not self.profile_id:
+            self.add_error("profile_id is required to retrieve user profile")
             return False
         return True
