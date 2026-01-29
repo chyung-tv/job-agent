@@ -29,6 +29,10 @@ class ProfilingWorkflowContext(BaseContext):
     user_profile: Optional[str] = None
     profile_id: Optional[UUID] = None
     references: Optional[dict] = None
+    suggested_job_titles: Optional[List[str]] = Field(
+        default=None,
+        description="List of AI-suggested job titles for this profile",
+    )
 
     def validate(self) -> bool:
         """Validate that context has required fields.

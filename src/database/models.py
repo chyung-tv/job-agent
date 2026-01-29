@@ -21,18 +21,22 @@ from sqlalchemy.orm import relationship
 from src.database.session import Base
 
 if TYPE_CHECKING:
-    from src.workflow.base_context import JobSearchWorkflowContext as WorkflowContext  # Alias for backward compatibility
+    from src.workflow.base_context import (
+        JobSearchWorkflowContext as WorkflowContext,
+    )  # Alias for backward compatibility
     from src.discovery.serpapi_models import JobResult
     from src.matcher.matcher import JobScreeningOutput
 
+
 class Run(Base):
     """Model representing a run of the application workflow.
-    
+
     Tracks the complete workflow execution from job search through matching,
     research, fabrication, and delivery. Used for orchestration and completion tracking.
     """
+
     __tablename__ = "runs"
-    
+
     # Primary key
     id = Column(
         UUID(as_uuid=True),
@@ -40,7 +44,7 @@ class Run(Base):
         default=uuid.uuid4,
         doc="Unique identifier for the run",
     )
-    
+
     # Foreign keys
     job_search_id = Column(
         UUID(as_uuid=True),
@@ -48,7 +52,7 @@ class Run(Base):
         nullable=True,  # Nullable initially for migration
         doc="Reference to the job search workflow",
     )
-    
+
     # Status tracking
     status = Column(
         String(255),
@@ -61,7 +65,7 @@ class Run(Base):
         nullable=True,
         doc="Error message if run failed",
     )
-    
+
     # Completion counters
     total_matched_jobs = Column(
         Integer,
@@ -93,14 +97,14 @@ class Run(Base):
         nullable=False,
         doc="Number of matched jobs with failed fabrication",
     )
-    
+
     # Completion timestamps
     completed_at = Column(
         DateTime,
         nullable=True,
         doc="Timestamp when the run completed (all matched jobs finished)",
     )
-    
+
     # Delivery tracking
     delivery_triggered = Column(
         Boolean,
@@ -113,7 +117,7 @@ class Run(Base):
         nullable=True,
         doc="Timestamp when delivery was triggered",
     )
-    
+
     # Timestamps
     created_at = Column(
         DateTime,
@@ -128,9 +132,10 @@ class Run(Base):
         nullable=False,
         doc="Timestamp when the run was last updated",
     )
-    
+
     # Relationships
     job_search = relationship("JobSearch", backref="runs")
+
 
 class JobSearch(Base):
     """Model representing a job search workflow run.
@@ -472,7 +477,7 @@ class MatchedJob(Base):
         nullable=True,
         doc="Timestamp when research was completed",
     )
-    
+
     # Fabrication status tracking
     fabrication_status = Column(
         String(50),
@@ -496,7 +501,7 @@ class MatchedJob(Base):
         nullable=True,
         doc="Timestamp when fabrication was completed",
     )
-    
+
     # Timestamps
     created_at = Column(
         DateTime,
@@ -600,6 +605,12 @@ class UserProfile(Base):
         doc="List of PDF file paths used to generate this profile",
     )
 
+    suggested_job_titles = Column(
+        JSON,
+        nullable=False,
+        doc="List of AI-suggested job titles for this profile",
+    )
+
     # Timestamps
     created_at = Column(
         DateTime,
@@ -653,6 +664,9 @@ class UserProfile(Base):
 
         pdf_paths_str = [str(p) for p in pdf_paths] if pdf_paths else None
 
+        # Get suggested_job_titles from context if available, otherwise default to empty list
+        suggested_job_titles = getattr(context, "suggested_job_titles", None) or []
+
         return cls(
             id=uuid.uuid4(),
             name=context.profile_name,
@@ -660,11 +674,13 @@ class UserProfile(Base):
             profile_text=context.user_profile,
             references=references,
             source_pdfs=pdf_paths_str,
+            suggested_job_titles=suggested_job_titles,
         )
+
 
 class CompanyResearch(Base):
     """CompanyResearch model to store the research results for a company.
-    
+
     This model stores comprehensive research about a company for a specific job posting.
     The research results contain information that can be cross-referenced with user profiles
     and used to fabricate tailored application materials.
@@ -686,7 +702,7 @@ class CompanyResearch(Base):
         nullable=False,
         doc="Company name (denormalized for quick access)",
     )
-    
+
     job_posting_id = Column(
         UUID(as_uuid=True),
         ForeignKey("job_postings.id", ondelete="CASCADE"),
@@ -701,7 +717,7 @@ class CompanyResearch(Base):
         nullable=False,
         doc="Synthesized research results about the company, team, culture, and expectations",
     )
-    
+
     citations = Column(
         JSON,
         nullable=True,
@@ -715,7 +731,7 @@ class CompanyResearch(Base):
         default=datetime.utcnow,
         doc="Timestamp when the research was created",
     )
-    
+
     updated_at = Column(
         DateTime,
         nullable=False,
@@ -730,13 +746,13 @@ class CompanyResearch(Base):
 
 class CoverLetter(Base):
     """CoverLetter model to store fabricated cover letter results.
-    
+
     Stores the topic and complete content of cover letters generated
     for matched jobs. Each matched job can have one cover letter.
     """
-    
+
     __tablename__ = "cover_letters"
-    
+
     # Primary key
     id = Column(
         UUID(as_uuid=True),
@@ -744,7 +760,7 @@ class CoverLetter(Base):
         default=uuid.uuid4,
         doc="Unique identifier for the cover letter",
     )
-    
+
     # Foreign key
     matched_job_id = Column(
         UUID(as_uuid=True),
@@ -753,20 +769,20 @@ class CoverLetter(Base):
         unique=True,  # One cover letter per matched job
         doc="Reference to the matched job",
     )
-    
+
     # Cover letter content
     topic = Column(
         JSON,
         nullable=False,
         doc="Cover letter topic and summary (stored as JSON from CoverLetterTopic)",
     )
-    
+
     content = Column(
         JSON,
         nullable=False,
         doc="Complete cover letter content (stored as JSON from CoverLetterContent)",
     )
-    
+
     # Timestamps
     created_at = Column(
         DateTime,
@@ -774,7 +790,7 @@ class CoverLetter(Base):
         default=datetime.utcnow,
         doc="Timestamp when the cover letter was created",
     )
-    
+
     updated_at = Column(
         DateTime,
         nullable=False,
@@ -782,19 +798,19 @@ class CoverLetter(Base):
         onupdate=datetime.utcnow,
         doc="Timestamp when the cover letter was last updated",
     )
-    
+
     # Relationship
     matched_job = relationship("MatchedJob", backref="cover_letter")
 
 
 class Artifact(Base):
     """Unified model to store fabricated application materials for matched jobs.
-    
+
     Stores both cover letter (JSON for Nylas) and CV (PDF URL) in a single row per matched job.
     """
-    
+
     __tablename__ = "artifacts"
-    
+
     # Primary key
     id = Column(
         UUID(as_uuid=True),
@@ -802,7 +818,7 @@ class Artifact(Base):
         default=uuid.uuid4,
         doc="Unique identifier for the artifact",
     )
-    
+
     # Foreign key
     matched_job_id = Column(
         UUID(as_uuid=True),
@@ -811,21 +827,21 @@ class Artifact(Base):
         unique=True,  # One artifact record per matched job
         doc="Reference to the matched job",
     )
-    
+
     # Cover letter data (JSON object passed to Nylas)
     cover_letter = Column(
         JSON,
         nullable=True,
         doc="Cover letter data as JSON (topic + content) - ready to pass to Nylas",
     )
-    
+
     # CV data (contains PDF URL)
     cv = Column(
         JSON,
         nullable=True,
         doc="CV data containing PDF URL: {'pdf_url': 'https://...'}",
     )
-    
+
     # Timestamps
     created_at = Column(
         DateTime,
@@ -833,7 +849,7 @@ class Artifact(Base):
         default=datetime.utcnow,
         doc="Timestamp when the artifact was created",
     )
-    
+
     updated_at = Column(
         DateTime,
         nullable=False,
@@ -841,20 +857,20 @@ class Artifact(Base):
         onupdate=datetime.utcnow,
         doc="Timestamp when the artifact was last updated",
     )
-    
+
     # Relationship
     matched_job = relationship("MatchedJob", backref="artifact", uselist=False)
 
 
 class WorkflowExecution(Base):
     """Unified model to track workflow execution state.
-    
+
     Provides a single table for tracking workflow execution across different
     workflow types, storing context snapshots and execution status.
     """
-    
+
     __tablename__ = "workflow_executions"
-    
+
     # Primary key
     id = Column(
         UUID(as_uuid=True),
@@ -862,7 +878,7 @@ class WorkflowExecution(Base):
         default=uuid.uuid4,
         doc="Unique identifier for the workflow execution",
     )
-    
+
     # Foreign key
     run_id = Column(
         UUID(as_uuid=True),
@@ -870,14 +886,14 @@ class WorkflowExecution(Base):
         nullable=False,
         doc="Reference to the run",
     )
-    
+
     # Workflow metadata
     workflow_type = Column(
         String(255),
         nullable=False,
         doc="Type of workflow (e.g., 'job_search')",
     )
-    
+
     # Status tracking
     status = Column(
         String(50),
@@ -885,47 +901,47 @@ class WorkflowExecution(Base):
         default="pending",
         doc="Execution status: pending, processing, completed, failed",
     )
-    
+
     current_node = Column(
         String(255),
         nullable=True,
         doc="Name of the current node being executed",
     )
-    
+
     # Context snapshot (stores complete context as JSON)
     context_snapshot = Column(
         JSON,
         nullable=True,
         doc="Complete snapshot of workflow context at this point in execution",
     )
-    
+
     # Error tracking
     error_message = Column(
         Text,
         nullable=True,
         doc="Error message if execution failed",
     )
-    
+
     # Timestamps
     started_at = Column(
         DateTime,
         nullable=True,
         doc="Timestamp when workflow execution started",
     )
-    
+
     completed_at = Column(
         DateTime,
         nullable=True,
         doc="Timestamp when workflow execution completed",
     )
-    
+
     created_at = Column(
         DateTime,
         nullable=False,
         default=datetime.utcnow,
         doc="Timestamp when the execution record was created",
     )
-    
+
     updated_at = Column(
         DateTime,
         nullable=False,
@@ -933,6 +949,6 @@ class WorkflowExecution(Base):
         onupdate=datetime.utcnow,
         doc="Timestamp when the execution record was last updated",
     )
-    
+
     # Relationship
     run = relationship("Run", backref="workflow_executions")

@@ -3,7 +3,7 @@
 import tempfile
 import uuid
 import logging
-from typing import Optional
+from typing import Optional, List
 
 import requests
 
@@ -42,18 +42,30 @@ class ProfilingOutput(BaseModel):
         description="Optional references like LinkedIn URL, portfolio URL, etc.",
     )
 
+    suggested_job_titles: List[str] = Field(
+        default_factory=list,
+        description="List of relevant job titles based on the user's profile, "
+        "skills, experience, and background. Titles should be specific "
+        "and industry-standard (e.g., 'Full-Stack Developer', 'Data Scientist', "
+        "'Registered Chinese Medical Practitioner').",
+    )
+
 
 class CVProcessingNode(BaseNode):
     """Node for processing CV/PDF documents and building structured user profile."""
 
-    def __init__(self, model: str = "google-gla:gemini-2.5-flash"):
+    def __init__(
+        self, model: str = "google-gla:gemini-2.5-flash", num_job_titles: int = 3
+    ):
         """Initialize the CV processing node.
 
         Args:
             model: AI model to use for profile extraction
+            num_job_titles: Number of job titles to suggest (default: 3)
         """
         super().__init__()
         self.model = model
+        self.num_job_titles = num_job_titles
         self.parser = PDFParser()
 
     def _validate_context(self, context: ProfilingWorkflowContext) -> bool:
@@ -161,6 +173,7 @@ class CVProcessingNode(BaseNode):
                     existing.source_pdfs = source_urls
                 if context.references:
                     existing.references = context.references
+                existing.suggested_job_titles = context.suggested_job_titles or []
                 profile_repo.update(existing)
                 context.profile_id = existing.id
                 self.logger.info(f"Updated existing user profile (ID: {existing.id})")
@@ -173,6 +186,7 @@ class CVProcessingNode(BaseNode):
                     profile_text=context.user_profile,
                     source_pdfs=source_urls,
                     references=context.references,
+                    suggested_job_titles=context.suggested_job_titles or [],
                 )
                 profile_repo.create(new_profile)
                 context.profile_id = new_profile.id
@@ -235,10 +249,19 @@ IMPORTANT: Extract the following information:
 8. Certifications
 9. Any other relevant professional information
 
+Additionally, analyze the user's profile and suggest {self.num_job_titles} relevant job titles 
+that match their skills, experience, and background. Consider:
+- Their technical skills and technologies
+- Their work experience and roles
+- Their education and certifications
+- Industry standards and common job titles
+
 Documents:
 {raw_text}{basic_info_section}
 
-Return a structured response with name, email, references (if any), and a detailed profile."""
+Return a structured response with name, email, references (if any), a detailed profile, and 
+suggested_job_titles. Job titles should be specific and industry-standard (e.g., 
+'Full-Stack Developer', 'Data Scientist', 'Registered Chinese Medical Practitioner')."""
 
         result = await profiling_agent.run(prompt)
         output = result.output
@@ -246,6 +269,7 @@ Return a structured response with name, email, references (if any), and a detail
         # Update context with profile information
         context.user_profile = output.profile or ""
         context.references = output.references
+        context.suggested_job_titles = output.suggested_job_titles or []
 
         # Use extracted name/email from LLM (prefer user-provided, fallback to LLM)
         if not context.name:
