@@ -1,10 +1,11 @@
 """CV processing node for extracting and structuring user profile from PDF documents."""
 
-from pathlib import Path
-from typing import Optional
+import tempfile
 import uuid
 import logging
-from datetime import datetime
+from typing import Optional
+
+import requests
 
 from pydantic_ai import Agent
 from pydantic import BaseModel, Field
@@ -19,84 +20,125 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+# Download limits
+DOWNLOAD_TIMEOUT_SEC = 30
+DOWNLOAD_MAX_BYTES = 10 * 1024 * 1024  # 10MB
+
 
 class ProfilingOutput(BaseModel):
     """Output model for user profile extraction."""
-    
-    name: str = Field(
-        description="User's full name extracted from the documents"
-    )
-    
-    email: str = Field(
-        description="User's email address extracted from the documents"
-    )
-    
+
+    name: str = Field(description="User's full name extracted from the documents")
+
+    email: str = Field(description="User's email address extracted from the documents")
+
     profile: str = Field(
         description="A detailed and comprehensive profile of the user including "
         "education, work experience, skills, and other relevant information."
     )
-    
+
     references: Optional[dict] = Field(
         default=None,
-        description="Optional references like LinkedIn URL, portfolio URL, etc."
+        description="Optional references like LinkedIn URL, portfolio URL, etc.",
     )
 
 
 class CVProcessingNode(BaseNode):
     """Node for processing CV/PDF documents and building structured user profile."""
-    
+
     def __init__(self, model: str = "google-gla:gemini-2.5-flash"):
         """Initialize the CV processing node.
-        
+
         Args:
             model: AI model to use for profile extraction
         """
         super().__init__()
         self.model = model
         self.parser = PDFParser()
-    
+
     def _validate_context(self, context: ProfilingWorkflowContext) -> bool:
         """Validate required context fields for CV processing.
-        
+
         Args:
             context: The workflow context
-            
+
         Returns:
             True if valid, False otherwise
         """
-        if not context.pdf_paths and not context.data_dir:
-            context.add_error("Either pdf_paths or data_dir is required for CV processing")
+        if not context.cv_urls or len(context.cv_urls) == 0:
+            context.add_error("At least one CV URL is required for CV processing")
             return False
         return True
-    
-    def _build_profile_from_pdfs(self, pdf_paths: list[Path]) -> str:
-        """Extract and combine text from multiple PDF documents.
-        
+
+    def _build_profile_from_urls(self, urls: list[str]) -> str:
+        """Download PDFs from URLs and extract combined text.
+
         Args:
-            pdf_paths: List of paths to PDF files to parse
-            
+            urls: List of URLs to CV/PDF documents
+
         Returns:
             Combined extracted text from all PDFs
         """
         all_text = []
-        
-        for pdf_path in pdf_paths:
-            if not pdf_path.exists():
-                self.logger.warning(f"File not found: {pdf_path.name}, skipping...")
+
+        for url in urls:
+            url = (url or "").strip()
+            if not url:
                 continue
-            
-            self.logger.info(f"Parsing {pdf_path.name}...")
+            if not (url.startswith("http://") or url.startswith("https://")):
+                self.logger.warning(f"Skipping invalid URL scheme: {url[:50]}...")
+                continue
+
             try:
-                text = self.parser.parse(pdf_path)
-                all_text.append(f"--- Content from {pdf_path.name} ---\n{text}")
+                resp = requests.get(
+                    url,
+                    timeout=DOWNLOAD_TIMEOUT_SEC,
+                    stream=True,
+                )
+                resp.raise_for_status()
+
+                content_length = resp.headers.get("Content-Length")
+                if content_length and int(content_length) > DOWNLOAD_MAX_BYTES:
+                    self.logger.warning(
+                        f"URL exceeds max size ({DOWNLOAD_MAX_BYTES} bytes): {url[:50]}..."
+                    )
+                    continue
+
+                accumulated = 0
+                chunks = []
+                for chunk in resp.iter_content(chunk_size=8192):
+                    if chunk:
+                        accumulated += len(chunk)
+                        if accumulated > DOWNLOAD_MAX_BYTES:
+                            self.logger.warning(
+                                f"URL exceeded max size while streaming: {url[:50]}..."
+                            )
+                            break
+                        chunks.append(chunk)
+
+                content = b"".join(chunks)
+                if not content:
+                    self.logger.warning(f"Empty response from URL: {url[:50]}...")
+                    continue
+
+                with tempfile.NamedTemporaryFile(suffix=".pdf", delete=True) as tmp:
+                    tmp.write(content)
+                    tmp.flush()
+                    self.logger.info(f"Parsing PDF from URL: {url[:60]}...")
+                    text = self.parser.parse(tmp.name)
+                    label = url.split("/")[-1] or "document"
+                    all_text.append(f"--- Content from {label} ---\n{text}")
+
+            except requests.RequestException as e:
+                self.logger.error(f"Failed to download {url[:50]}...: {e}")
             except Exception as e:
-                self.logger.error(f"Failed to parse {pdf_path.name}: {e}")
-        
+                self.logger.error(f"Failed to parse PDF from {url[:50]}...: {e}")
+
         return "\n\n".join(all_text)
-    
+
     def _persist_data(self, context: ProfilingWorkflowContext, session) -> None:
         """Save user profile to database.
-        
+
         Args:
             context: The workflow context with profile information
             session: Database session
@@ -104,19 +146,19 @@ class CVProcessingNode(BaseNode):
         if not context.name or not context.email or not context.user_profile:
             self.logger.warning("Missing profile information, cannot persist")
             return
-        
+
         try:
-            pdf_paths_str = [str(p) for p in (context.pdf_paths or [])]
-            
+            source_urls = list(context.cv_urls) if context.cv_urls else []
+
             profile_repo = GenericRepository(session, UserProfile)
-            
+
             # Check if profile with this name and email already exists
             existing = profile_repo.find_one(name=context.name, email=context.email)
             if existing:
                 # Update existing profile
                 existing.profile_text = context.user_profile
-                if pdf_paths_str:
-                    existing.source_pdfs = pdf_paths_str
+                if source_urls:
+                    existing.source_pdfs = source_urls
                 if context.references:
                     existing.references = context.references
                 profile_repo.update(existing)
@@ -129,7 +171,7 @@ class CVProcessingNode(BaseNode):
                     name=context.name,
                     email=context.email,
                     profile_text=context.user_profile,
-                    source_pdfs=pdf_paths_str,
+                    source_pdfs=source_urls,
                     references=context.references,
                 )
                 profile_repo.create(new_profile)
@@ -138,55 +180,48 @@ class CVProcessingNode(BaseNode):
         except Exception as e:
             self.logger.error(f"Failed to save profile to database: {e}")
             raise
-    
+
     async def run(self, context: ProfilingWorkflowContext) -> ProfilingWorkflowContext:
-        """Process CV/PDF documents and build structured user profile.
-        
+        """Process CV/PDF documents from URLs and build structured user profile.
+
         Args:
-            context: The workflow context with user input and PDF paths
-            
+            context: The workflow context with user input and CV URLs
+
         Returns:
             Updated context with profile information
         """
         self.logger.info("Starting CV processing")
-        
+
         # Validate context
         if not self._validate_context(context):
             self.logger.error("Context validation failed")
             return context
-        
-        # Set default data_dir if not provided
-        if context.data_dir is None and context.pdf_paths is None:
-            context.data_dir = Path(__file__).parent.parent.parent.parent / "data"
-        
-        # Determine which PDFs to parse
-        pdf_paths = context.pdf_paths
-        if pdf_paths is None:
-            data_dir = context.data_dir
-            # Look for common PDF files
-            common_files = ["linkdeln.pdf", "linkedin.pdf", "CV_YungCH.pdf", "cv.pdf", "resume.pdf"]
-            pdf_paths = [data_dir / f for f in common_files if (data_dir / f).exists()]
-        
-        if not pdf_paths:
-            context.add_error("No PDF files found to parse. Please provide pdf_paths or ensure PDFs exist in data directory.")
-            self.logger.error("No PDF files found to parse")
-            return context
-        
-        # Extract text from PDFs
-        self.logger.info("Extracting text from PDF documents...")
-        raw_text = self._build_profile_from_pdfs(pdf_paths)
+
+        # Extract text from PDFs at URLs
+        self.logger.info("Extracting text from CV URLs...")
+        raw_text = self._build_profile_from_urls(context.cv_urls)
         context.raw_cv_text = raw_text
-        
+
+        if not raw_text.strip():
+            context.add_error(
+                "No PDF content could be extracted from the provided URLs. "
+                "Check that URLs are valid and point to PDF files."
+            )
+            self.logger.error("No PDF content extracted from URLs")
+            return context
+
         # Use AI agent to structure the profile
         self.logger.info("Building structured profile using AI...")
-        
+
         profiling_agent = Agent(model=self.model, output_type=ProfilingOutput)
-        
+
         # Combine user-provided basic info with CV content
         basic_info_section = ""
         if context.basic_info:
-            basic_info_section = f"\n\nAdditional Information Provided by User:\n{context.basic_info}"
-        
+            basic_info_section = (
+                f"\n\nAdditional Information Provided by User:\n{context.basic_info}"
+            )
+
         prompt = f"""Extract and structure a comprehensive user profile from the following documents.
 
 IMPORTANT: Extract the following information:
@@ -204,26 +239,28 @@ Documents:
 {raw_text}{basic_info_section}
 
 Return a structured response with name, email, references (if any), and a detailed profile."""
-        
+
         result = await profiling_agent.run(prompt)
         output = result.output
-        
+
         # Update context with profile information
         context.user_profile = output.profile or ""
         context.references = output.references
-        
+
         # Use extracted name/email from LLM (prefer user-provided, fallback to LLM)
         if not context.name:
             context.name = output.name
         if not context.email:
             context.email = output.email
-        
+
         # If profile is empty, add error
         if not context.user_profile:
-            context.add_error("Profile was built but is empty. Check PDF files and LLM output.")
+            context.add_error(
+                "Profile was built but is empty. Check PDF URLs and LLM output."
+            )
             self.logger.error("Profile is empty after extraction")
             return context
-        
+
         # Persist to database
         session_gen = self._get_db_session()
         session = next(session_gen)
@@ -239,6 +276,6 @@ Return a structured response with name, email, references (if any), and a detail
                 next(session_gen, None)
             except StopIteration:
                 pass
-        
+
         self.logger.info("CV processing completed")
         return context

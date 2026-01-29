@@ -9,6 +9,11 @@ project_root = Path(__file__).parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
+# Sample PDF URL for profiling tests (public, small). Replace with your own URL for local testing.
+SAMPLE_CV_URL = (
+    "https://drive.google.com/uc?export=download&id=1ePzBya5aOvGv2CdU1-61ZhGaWX-gkMMu"
+)
+
 from src.workflow.job_search_workflow import JobSearchWorkflow
 from src.workflow.base_context import JobSearchWorkflowContext
 from src.workflow.nodes.discovery_node import DiscoveryNode
@@ -71,12 +76,12 @@ async def test_profiling_workflow():
     print("TEST: ProfilingWorkflow")
     print("=" * 80)
 
-    # Create profiling workflow context with user input
+    # Create profiling workflow context with user input (cv_urls required)
     context = ProfilingWorkflow.Context(
         name="Test User",
         email="test@example.com",
         basic_info="Software engineer with 5 years of experience",
-        data_dir=Path(__file__).parent.parent / "data",
+        cv_urls=[SAMPLE_CV_URL],
     )
 
     workflow = ProfilingWorkflow()
@@ -110,11 +115,11 @@ async def test_matching_node():
     discovery_node = DiscoveryNode()
     discovery_result = await discovery_node.run(discovery_context)
 
-    # Create profile first using ProfilingWorkflow
+    # Create profile first using ProfilingWorkflow (cv_urls required)
     profiling_context = ProfilingWorkflow.Context(
         name="Test User",
         email="test@example.com",
-        data_dir=Path(__file__).parent.parent / "data",
+        cv_urls=[SAMPLE_CV_URL],
     )
     profiling_workflow = ProfilingWorkflow()
     profiling_result = await profiling_workflow.run(profiling_context)
@@ -415,7 +420,6 @@ async def test_complete_workflow():
                 location="Hong Kong",
                 num_results=10,
                 max_screening=3,
-                data_dir=Path(__file__).parent.parent / "data",
             )
 
             workflow = JobSearchWorkflow()

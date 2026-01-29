@@ -72,7 +72,8 @@ async def run_profiling_workflow(context: ProfilingWorkflow.Context):
     """Run the profiling workflow.
 
     Args:
-        context: Profiling workflow context with user input (name, email, basic_info, pdf_paths/data_dir)
+        context: Profiling workflow context with name, email, cv_urls (list of CV/PDF URLs),
+            and optional basic_info. The backend downloads and parses PDFs from the URLs.
 
     Returns:
         Updated context with profile information and profile_id

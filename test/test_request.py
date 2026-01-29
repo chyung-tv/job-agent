@@ -14,19 +14,19 @@ API_BASE_URL = "http://localhost:8000"
 
 def test_health_check() -> bool:
     """Test the health check endpoint.
-    
+
     Returns:
         True if test passed, False otherwise
     """
     print("\n" + "=" * 80)
     print("TEST: Health Check")
     print("=" * 80)
-    
+
     try:
         response = requests.get(f"{API_BASE_URL}/health")
         print(f"Status Code: {response.status_code}")
         print(f"Response: {json.dumps(response.json(), indent=2)}")
-        
+
         if response.status_code == 200:
             print("✓ Health check passed")
             return True
@@ -45,53 +45,46 @@ def test_health_check() -> bool:
 def test_profiling_workflow(
     name: str,
     email: str,
+    cv_urls: list[str],
     basic_info: Optional[str] = None,
-    data_dir: Optional[str] = None,
-    pdf_paths: Optional[list] = None,
 ) -> Optional[Dict[str, Any]]:
     """Test the profiling workflow endpoint.
-    
+
     Args:
         name: User's name
         email: User's email
+        cv_urls: List of URLs to CV/PDF documents (required)
         basic_info: Optional basic information about the user
-        data_dir: Optional path to directory containing PDFs
-        pdf_paths: Optional list of PDF file paths
-        
+
     Returns:
         Response JSON if successful, None otherwise
     """
     print("\n" + "=" * 80)
     print("TEST: Profiling Workflow")
     print("=" * 80)
-    
+
     # Prepare request payload
     payload = {
         "name": name,
         "email": email,
+        "cv_urls": [u.strip() for u in cv_urls if (u or "").strip()],
     }
-    
+
     if basic_info:
         payload["basic_info"] = basic_info
-    
-    if data_dir:
-        payload["data_dir"] = str(data_dir)
-    
-    if pdf_paths:
-        payload["pdf_paths"] = [str(p) for p in pdf_paths]
-    
+
     print("Request Payload:")
     print(json.dumps(payload, indent=2))
-    
+
     try:
         response = requests.post(
             f"{API_BASE_URL}/workflow/profiling",
             json=payload,
-            headers={"Content-Type": "application/json"}
+            headers={"Content-Type": "application/json"},
         )
-        
+
         print(f"\nStatus Code: {response.status_code}")
-        
+
         if response.status_code == 202:
             result = response.json()
             print("\nResponse:")
@@ -100,10 +93,10 @@ def test_profiling_workflow(
             print(f"  - Profile Email: {result.get('email')}")
             print(f"  - Profile Length: {len(result.get('user_profile', ''))} chars")
             print(f"  - Has Errors: {len(result.get('errors', [])) > 0}")
-            
-            if result.get('errors'):
+
+            if result.get("errors"):
                 print(f"  - Errors: {result['errors']}")
-            
+
             print("✓ Profiling workflow completed")
             return result
         else:
@@ -114,7 +107,7 @@ def test_profiling_workflow(
             except (ValueError, KeyError):
                 print(f"Error: {response.text}")
             return None
-            
+
     except requests.exceptions.ConnectionError:
         print("✗ Connection failed - Is the API server running?")
         return None
@@ -131,21 +124,21 @@ def test_job_search_workflow(
     max_screening: int = 5,
 ) -> Optional[Dict[str, Any]]:
     """Test the job search workflow endpoint.
-    
+
     Args:
         query: Job search query
         location: Job search location
         profile_id: UUID of the profile to retrieve
         num_results: Number of job results to fetch
         max_screening: Maximum number of jobs to screen
-        
+
     Returns:
         Response JSON if successful, None otherwise
     """
     print("\n" + "=" * 80)
     print("TEST: Job Search Workflow")
     print("=" * 80)
-    
+
     # Prepare request payload
     payload = {
         "query": query,
@@ -154,19 +147,19 @@ def test_job_search_workflow(
         "num_results": num_results,
         "max_screening": max_screening,
     }
-    
+
     print("Request Payload:")
     print(json.dumps(payload, indent=2))
-    
+
     try:
         response = requests.post(
             f"{API_BASE_URL}/workflow/job-search",
             json=payload,
-            headers={"Content-Type": "application/json"}
+            headers={"Content-Type": "application/json"},
         )
-        
+
         print(f"\nStatus Code: {response.status_code}")
-        
+
         if response.status_code == 202:
             result = response.json()
             print("\nResponse Summary:")
@@ -175,10 +168,10 @@ def test_job_search_workflow(
             print(f"  - Matches Found: {len(result.get('matched_results', []))}")
             print(f"  - Profile Retrieved: {result.get('user_profile') is not None}")
             print(f"  - Has Errors: {len(result.get('errors', [])) > 0}")
-            
-            if result.get('errors'):
+
+            if result.get("errors"):
                 print(f"  - Errors: {result['errors']}")
-            
+
             print("✓ Job search workflow completed")
             return result
         else:
@@ -189,7 +182,7 @@ def test_job_search_workflow(
             except (ValueError, KeyError):
                 print(f"Error: {response.text}")
             return None
-            
+
     except requests.exceptions.ConnectionError:
         print("✗ Connection failed - Is the API server running?")
         return None
@@ -198,93 +191,78 @@ def test_job_search_workflow(
         return None
 
 
-def get_profiling_input() -> Dict[str, Any]:
+def get_profiling_input() -> Optional[Dict[str, Any]]:
     """Get profiling workflow input from user.
-    
+
     Returns:
-        Dictionary with profiling parameters
+        Dictionary with profiling parameters, or None if invalid
     """
     print("\n" + "-" * 80)
     print("Profiling Workflow Input")
     print("-" * 80)
-    
+
     name = input("Enter name (required): ").strip()
     if not name:
         print("Name is required!")
         return None
-    
+
     email = input("Enter email (required): ").strip()
     if not email:
         print("Email is required!")
         return None
-    
+
     basic_info = input("Enter basic info (optional, press Enter to skip): ").strip()
     if not basic_info:
         basic_info = None
-    
-    print("\nPDF Input Options:")
-    print("  1. Use data_dir (directory path)")
-    print("  2. Use pdf_paths (comma-separated file paths)")
-    print("  3. Use default data directory")
-    
-    pdf_choice = input("Choose option (1-3, default: 3): ").strip() or "3"
-    
-    data_dir = None
-    pdf_paths = None
-    
-    if pdf_choice == "1":
-        data_dir = input("Enter data directory path: ").strip()
-        if not data_dir:
-            data_dir = None
-    elif pdf_choice == "2":
-        pdf_input = input("Enter PDF paths (comma-separated): ").strip()
-        if pdf_input:
-            pdf_paths = [p.strip() for p in pdf_input.split(",")]
-    else:
-        # Use default data directory
-        project_root = Path(__file__).parent.parent
-        data_dir = str(project_root / "data")
-    
+
+    url_input = input(
+        "Enter CV/PDF URLs (comma-separated, e.g. https://example.com/cv.pdf): "
+    ).strip()
+    cv_urls = [u.strip() for u in url_input.split(",") if u.strip()]
+
+    if not cv_urls:
+        print("At least one CV URL is required!")
+        return None
+
     return {
         "name": name,
         "email": email,
         "basic_info": basic_info,
-        "data_dir": data_dir,
-        "pdf_paths": pdf_paths,
+        "cv_urls": cv_urls,
     }
 
 
 def get_job_search_input() -> Dict[str, Any]:
     """Get job search workflow input from user.
-    
+
     Returns:
         Dictionary with job search parameters
     """
     print("\n" + "-" * 80)
     print("Job Search Workflow Input")
     print("-" * 80)
-    
+
     query = input("Enter job search query (required): ").strip()
     if not query:
         print("Query is required!")
         return None
-    
+
     location = input("Enter location (required): ").strip()
     if not location:
         print("Location is required!")
         return None
-    
+
     profile_id = input("Enter profile ID (UUID, required): ").strip()
     if not profile_id:
         print("Profile ID is required!")
         return None
-    
+
     num_results_input = input("Enter number of results (default: 10): ").strip()
     num_results = int(num_results_input) if num_results_input else 10
-    
+
     max_screening_input = input("Enter max screening (default: 5): ").strip()
     max_screening = int(max_screening_input) if max_screening_input else 5
-    
+
     return {
         "query": query,
         "location": location,
@@ -314,14 +292,16 @@ def display_menu():
 def interactive_main():
     """Interactive CLI for test selection."""
     global API_BASE_URL
-    
+
     # Check API connection first
     if not test_health_check():
         print("\n⚠ API server is not running or not accessible.")
         print("  Start the server with: python -m src.api.api")
         print("  Or change API URL by editing API_BASE_URL in the script")
-        
-        change_url = input("\nDo you want to change the API URL? (y/n): ").strip().lower()
+
+        change_url = (
+            input("\nDo you want to change the API URL? (y/n): ").strip().lower()
+        )
         if change_url == "y":
             new_url = input("Enter new API URL: ").strip()
             if new_url:
@@ -329,7 +309,7 @@ def interactive_main():
                 print(f"API URL changed to: {API_BASE_URL}")
         else:
             return
-    
+
     while True:
         display_menu()
         choice = input("Enter your choice (0-4): ").strip()
@@ -352,28 +332,28 @@ def interactive_main():
             print("\n" + "=" * 80)
             print("FULL FLOW: Profiling → Job Search")
             print("=" * 80)
-            
+
             # Step 1: Profiling
             profiling_input = get_profiling_input()
             if not profiling_input:
                 print("Skipping full flow test due to invalid profiling input.")
                 continue
-            
+
             profiling_result = test_profiling_workflow(**profiling_input)
-            
+
             if not profiling_result:
                 print("\n⚠ Profiling workflow failed. Cannot proceed with job search.")
                 continue
-            
+
             # Step 2: Job Search using created profile
             profile_id = profiling_result.get("profile_id")
-            
+
             if profile_id:
                 print("\n" + "-" * 80)
                 print("Using created profile for job search...")
                 print(f"  Profile ID: {profile_id}")
                 print("-" * 80)
-                
+
                 job_search_input = get_job_search_input()
                 if job_search_input:
                     # Override with actual profile_id
@@ -399,13 +379,13 @@ def interactive_main():
 def main():
     """Main test runner with both CLI and argument parsing support."""
     global API_BASE_URL
-    
+
     # Allow custom API URL via command line argument
     if len(sys.argv) > 1 and sys.argv[1].startswith("http"):
         API_BASE_URL = sys.argv[1]
         print(f"Using custom API URL: {API_BASE_URL}")
         sys.argv = [sys.argv[0]] + sys.argv[2:]
-    
+
     # If no arguments provided, show interactive menu
     if len(sys.argv) == 1:
         interactive_main()
@@ -423,9 +403,14 @@ def main():
         type=str,
         help="API base URL (default: http://localhost:8000)",
     )
+    parser.add_argument(
+        "--cv-urls",
+        type=str,
+        help="Comma-separated CV/PDF URLs (required for --test profiling and --test all)",
+    )
 
     args = parser.parse_args()
-    
+
     if args.url:
         API_BASE_URL = args.url
 
@@ -435,15 +420,18 @@ def main():
     elif args.test == "health":
         test_health_check()
     elif args.test == "profiling":
-        # Use default values for command-line mode
-        project_root = Path(__file__).parent.parent
-        data_dir = project_root / "data"
-        test_profiling_workflow(
-            name="Test User",
-            email="test@example.com",
-            basic_info="Software engineer with 5 years of experience",
-            data_dir=str(data_dir) if data_dir.exists() else None,
-        )
+        cv_urls = [u.strip() for u in (args.cv_urls or "").split(",") if u.strip()]
+        if not cv_urls:
+            print("⚠ --test profiling requires --cv-urls (comma-separated URLs).")
+            print("  Example: --test profiling --cv-urls 'https://example.com/cv.pdf'")
+            print("  Or run without --test to use the interactive menu.")
+        else:
+            test_profiling_workflow(
+                name="Test User",
+                email="test@example.com",
+                cv_urls=cv_urls,
+                basic_info="Software engineer with 5 years of experience",
+            )
     elif args.test == "job-search":
         # Note: You need to provide a valid profile_id from a previous profiling workflow run
         print("⚠ Warning: job-search test requires a valid profile_id.")
@@ -462,20 +450,23 @@ def main():
         if not test_health_check():
             print("\n⚠ Health check failed. Please ensure the API server is running.")
             return
-        
-        project_root = Path(__file__).parent.parent
-        data_dir = project_root / "data"
-        
+
+        cv_urls = [u.strip() for u in (args.cv_urls or "").split(",") if u.strip()]
+        if not cv_urls:
+            print("⚠ --test all requires --cv-urls (comma-separated CV/PDF URLs).")
+            print("  Example: --test all --cv-urls 'https://example.com/cv.pdf'")
+            return
+
         profiling_result = test_profiling_workflow(
             name="Test User",
             email="test@example.com",
+            cv_urls=cv_urls,
             basic_info="Software engineer with 5 years of experience",
-            data_dir=str(data_dir) if data_dir.exists() else None,
         )
-        
+
         if profiling_result:
             profile_id = profiling_result.get("profile_id")
-            
+
             if profile_id:
                 test_job_search_workflow(
                     query="software engineer",
