@@ -17,6 +17,9 @@ class ProfilingWorkflowContext(BaseContext):
     # ========== Input Parameters ==========
     name: str
     email: str
+    location: str = Field(
+        ..., description="Preferred job search location (e.g., 'Hong Kong')"
+    )
     basic_info: Optional[str] = Field(
         default=None, description="Basic information about the user (optional)"
     )
@@ -45,6 +48,9 @@ class ProfilingWorkflowContext(BaseContext):
             return False
         if not self.email or not self.email.strip():
             self.add_error("Email is required")
+            return False
+        if not self.location or not self.location.strip():
+            self.add_error("Location is required")
             return False
         if not self.cv_urls or len(self.cv_urls) == 0:
             self.add_error("At least one CV URL is required")

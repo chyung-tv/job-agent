@@ -580,6 +580,12 @@ class UserProfile(Base):
         doc="User's email address extracted from PDFs",
     )
 
+    location = Column(
+        String(255),
+        nullable=False,
+        doc="Preferred job search location for this profile",
+    )
+
     # Unique constraint on name + email combination
     __table_args__ = (
         UniqueConstraint("name", "email", name="uq_user_profile_name_email"),
@@ -667,10 +673,14 @@ class UserProfile(Base):
         # Get suggested_job_titles from context if available, otherwise default to empty list
         suggested_job_titles = getattr(context, "suggested_job_titles", None) or []
 
+        # Get location from context if available (for ProfilingWorkflowContext)
+        location = getattr(context, "location", None) or ""
+
         return cls(
             id=uuid.uuid4(),
             name=context.profile_name,
             email=context.profile_email,
+            location=location,
             profile_text=context.user_profile,
             references=references,
             source_pdfs=pdf_paths_str,

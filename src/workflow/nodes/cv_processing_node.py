@@ -14,15 +14,16 @@ from src.workflow.base_node import BaseNode
 from src.workflow.profiling_context import ProfilingWorkflowContext
 from src.profiling.pdf_parser import PDFParser
 from src.database import GenericRepository, UserProfile
+from src.config import (
+    DOWNLOAD_TIMEOUT_SEC,
+    DOWNLOAD_MAX_BYTES,
+    DEFAULT_NUM_JOB_TITLES,
+)
 from dotenv import load_dotenv
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
-
-# Download limits
-DOWNLOAD_TIMEOUT_SEC = 30
-DOWNLOAD_MAX_BYTES = 10 * 1024 * 1024  # 10MB
 
 
 class ProfilingOutput(BaseModel):
@@ -55,7 +56,9 @@ class CVProcessingNode(BaseNode):
     """Node for processing CV/PDF documents and building structured user profile."""
 
     def __init__(
-        self, model: str = "google-gla:gemini-2.5-flash", num_job_titles: int = 3
+        self,
+        model: str = "google-gla:gemini-2.5-flash",
+        num_job_titles: int = DEFAULT_NUM_JOB_TITLES,
     ):
         """Initialize the CV processing node.
 
@@ -169,6 +172,7 @@ class CVProcessingNode(BaseNode):
             if existing:
                 # Update existing profile
                 existing.profile_text = context.user_profile
+                existing.location = context.location
                 if source_urls:
                     existing.source_pdfs = source_urls
                 if context.references:
@@ -183,6 +187,7 @@ class CVProcessingNode(BaseNode):
                     id=uuid.uuid4(),
                     name=context.name,
                     email=context.email,
+                    location=context.location,
                     profile_text=context.user_profile,
                     source_pdfs=source_urls,
                     references=context.references,

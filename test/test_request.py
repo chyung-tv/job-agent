@@ -4,12 +4,11 @@ import requests
 import json
 import sys
 import argparse
-from pathlib import Path
 from typing import Optional, Dict, Any
 
 
 # API Configuration
-API_BASE_URL = "http://localhost:8000"
+API_BASE_URL = "http://127.0.0.1:8000"
 
 
 def test_health_check() -> bool:
@@ -45,6 +44,7 @@ def test_health_check() -> bool:
 def test_profiling_workflow(
     name: str,
     email: str,
+    location: str,
     cv_urls: list[str],
     basic_info: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
@@ -67,6 +67,7 @@ def test_profiling_workflow(
     payload = {
         "name": name,
         "email": email,
+        "location": location,
         "cv_urls": [u.strip() for u in cv_urls if (u or "").strip()],
     }
 
@@ -87,17 +88,37 @@ def test_profiling_workflow(
 
         if response.status_code == 202:
             result = response.json()
-            print("\nResponse:")
-            print(f"  - Profile ID: {result.get('profile_id')}")
-            print(f"  - Profile Name: {result.get('name')}")
-            print(f"  - Profile Email: {result.get('email')}")
-            print(f"  - Profile Length: {len(result.get('user_profile', ''))} chars")
-            print(f"  - Has Errors: {len(result.get('errors', [])) > 0}")
+            print("\n✓ Profiling workflow task enqueued successfully!")
+            print("\nTask Metadata:")
+            print(f"  - Run ID: {result.get('run_id')}")
+            print(f"  - Execution ID: {result.get('execution_id')}")
+            print(f"  - Task ID: {result.get('task_id')}")
+            print(f"  - Status: {result.get('status')}")
+            print(
+                f"  - Estimated Completion: {result.get('estimated_completion_time')}"
+            )
+            print(f"  - Status URL: {result.get('status_url')}")
 
-            if result.get("errors"):
-                print(f"  - Errors: {result['errors']}")
+            print("\n" + "=" * 80)
+            print("📋 MONITORING CELERY WORKER STATUS")
+            print("=" * 80)
+            print("\nThe workflow is now running asynchronously via Celery.")
+            print("\nTo monitor the task status, you can:")
+            print("\n1. View Celery Worker Logs (Recommended):")
+            print("   docker compose logs -f celery-worker")
+            print("   # Or: docker logs -f job-agent-celery-worker")
+            print("\n2. Check Database Status:")
+            print("   Query the 'workflow_executions' table:")
+            print(
+                f"   SELECT * FROM workflow_executions WHERE id = '{result.get('execution_id')}';"
+            )
+            print("\n3. Check Task Status via API (if status endpoint exists):")
+            print(f"   GET {API_BASE_URL}{result.get('status_url')}")
+            print("\n4. Check Redis Queue:")
+            print("   docker exec -it job-agent-redis redis-cli")
+            print("   LLEN celery")
+            print("\n" + "-" * 80)
 
-            print("✓ Profiling workflow completed")
             return result
         else:
             print("✗ Request failed")
@@ -162,17 +183,37 @@ def test_job_search_workflow(
 
         if response.status_code == 202:
             result = response.json()
-            print("\nResponse Summary:")
-            print(f"  - Jobs Found: {len(result.get('jobs', []))}")
-            print(f"  - Jobs Screened: {len(result.get('all_screening_results', []))}")
-            print(f"  - Matches Found: {len(result.get('matched_results', []))}")
-            print(f"  - Profile Retrieved: {result.get('user_profile') is not None}")
-            print(f"  - Has Errors: {len(result.get('errors', [])) > 0}")
+            print("\n✓ Job search workflow task enqueued successfully!")
+            print("\nTask Metadata:")
+            print(f"  - Run ID: {result.get('run_id')}")
+            print(f"  - Execution ID: {result.get('execution_id')}")
+            print(f"  - Task ID: {result.get('task_id')}")
+            print(f"  - Status: {result.get('status')}")
+            print(
+                f"  - Estimated Completion: {result.get('estimated_completion_time')}"
+            )
+            print(f"  - Status URL: {result.get('status_url')}")
 
-            if result.get("errors"):
-                print(f"  - Errors: {result['errors']}")
+            print("\n" + "=" * 80)
+            print("📋 MONITORING CELERY WORKER STATUS")
+            print("=" * 80)
+            print("\nThe workflow is now running asynchronously via Celery.")
+            print("\nTo monitor the task status, you can:")
+            print("\n1. View Celery Worker Logs (Recommended):")
+            print("   docker compose logs -f celery-worker")
+            print("   # Or: docker logs -f job-agent-celery-worker")
+            print("\n2. Check Database Status:")
+            print("   Query the 'workflow_executions' table:")
+            print(
+                f"   SELECT * FROM workflow_executions WHERE id = '{result.get('execution_id')}';"
+            )
+            print("\n3. Check Task Status via API (if status endpoint exists):")
+            print(f"   GET {API_BASE_URL}{result.get('status_url')}")
+            print("\n4. Check Redis Queue:")
+            print("   docker exec -it job-agent-redis redis-cli")
+            print("   LLEN celery")
+            print("\n" + "-" * 80)
 
-            print("✓ Job search workflow completed")
             return result
         else:
             print("✗ Request failed")
@@ -211,6 +252,11 @@ def get_profiling_input() -> Optional[Dict[str, Any]]:
         print("Email is required!")
         return None
 
+    location = input("Enter location (required, e.g. 'Hong Kong'): ").strip()
+    if not location:
+        print("Location is required!")
+        return None
+
     basic_info = input("Enter basic info (optional, press Enter to skip): ").strip()
     if not basic_info:
         basic_info = None
@@ -227,9 +273,97 @@ def get_profiling_input() -> Optional[Dict[str, Any]]:
     return {
         "name": name,
         "email": email,
+        "location": location,
         "basic_info": basic_info,
         "cv_urls": cv_urls,
     }
+
+
+def test_job_search_from_profile(
+    profile_id: str,
+    num_results: int = 10,
+    max_screening: int = 3,
+) -> Optional[Dict[str, Any]]:
+    """Test the job search from profile endpoint.
+
+    Args:
+        profile_id: UUID of the profile to use for job searches
+        num_results: Number of job results to fetch per search (default: 10)
+        max_screening: Maximum number of jobs to screen per search (default: 3)
+
+    Returns:
+        Response JSON if successful, None otherwise
+    """
+    print("\n" + "=" * 80)
+    print("TEST: Job Search from Profile")
+    print("=" * 80)
+
+    # Prepare request payload
+    payload = {
+        "profile_id": profile_id,
+        "num_results": num_results,
+        "max_screening": max_screening,
+    }
+
+    print("Request Payload:")
+    print(json.dumps(payload, indent=2))
+
+    try:
+        response = requests.post(
+            f"{API_BASE_URL}/workflow/job-search/from-profile",
+            json=payload,
+            headers={"Content-Type": "application/json"},
+        )
+
+        print(f"\nStatus Code: {response.status_code}")
+
+        if response.status_code == 202:
+            result = response.json()
+            print("\nResponse:")
+            print(f"  - Message: {result.get('message')}")
+            print(f"  - Profile ID: {result.get('profile_id')}")
+            print(f"  - Location: {result.get('location')}")
+            print(f"  - Job Titles Count: {result.get('job_titles_count')}")
+            print(f"  - Job Titles: {result.get('job_titles')}")
+
+            print("\n✓ Job searches initiated via Celery!")
+            print(f"\n  - {result.get('job_titles_count')} job searches enqueued")
+            print("  - Each search runs as an independent Celery task")
+            print("\n" + "=" * 80)
+            print("📋 MONITORING CELERY WORKER STATUS")
+            print("=" * 80)
+            print("\nAll job searches are now running asynchronously via Celery.")
+            print("\nTo monitor the tasks, you can:")
+            print("\n1. View Celery Worker Logs (Recommended):")
+            print("   docker compose logs -f celery-worker")
+            print("   # Or: docker logs -f job-agent-celery-worker")
+            print("\n2. Check Database Status:")
+            print(
+                "   Query the 'workflow_executions' table for all job_search workflows:"
+            )
+            print(
+                "   SELECT * FROM workflow_executions WHERE workflow_type = 'job_search' ORDER BY created_at DESC;"
+            )
+            print("\n3. Check Redis Queue:")
+            print("   docker exec -it job-agent-redis redis-cli")
+            print("   LLEN celery")
+            print("\n" + "-" * 80)
+            return result
+        else:
+            print("✗ Request failed")
+            try:
+                error_detail = response.json()
+                print(f"Error Detail: {json.dumps(error_detail, indent=2)}")
+            except (ValueError, KeyError):
+                print(f"Error: {response.text}")
+            return None
+
+    except requests.exceptions.ConnectionError:
+        print("✗ Connection failed - Is the API server running?")
+        return None
+    except Exception as e:
+        print(f"✗ Error: {e}")
+        return None
 
 
 def get_job_search_input() -> Dict[str, Any]:
@@ -272,6 +406,92 @@ def get_job_search_input() -> Dict[str, Any]:
     }
 
 
+def check_workflow_status(run_id: str) -> Optional[Dict[str, Any]]:
+    """Check workflow execution status.
+
+    Args:
+        run_id: UUID of the run to check
+
+    Returns:
+        Status information if available, None otherwise
+    """
+    print("\n" + "=" * 80)
+    print(f"Checking Workflow Status for Run ID: {run_id}")
+    print("=" * 80)
+
+    try:
+        # Try to get status from API endpoint if it exists
+        status_url = f"{API_BASE_URL}/workflow/status/{run_id}"
+        response = requests.get(status_url)
+
+        if response.status_code == 200:
+            result = response.json()
+            print("\n✓ Status Retrieved:")
+            print(f"  - Run ID: {result.get('run_id')}")
+            print(f"  - Execution ID: {result.get('execution_id')}")
+            print(f"  - Workflow Type: {result.get('workflow_type')}")
+            print(f"  - Status: {result.get('status')}")
+            print(f"  - Current Node: {result.get('current_node', 'N/A')}")
+            print(f"  - Progress: {result.get('progress_percent', 'N/A')}%")
+            print(f"  - Started At: {result.get('started_at', 'N/A')}")
+            print(f"  - Completed At: {result.get('completed_at', 'N/A')}")
+
+            if result.get("error_message"):
+                print(f"  - Error: {result.get('error_message')}")
+
+            return result
+        elif response.status_code == 404:
+            print(f"\n⚠ Status endpoint not found or run_id not found: {run_id}")
+            print("\nYou can check status via:")
+            print(
+                "1. Database: SELECT * FROM workflow_executions WHERE run_id = '...';"
+            )
+            print("2. Celery logs: docker compose logs -f celery-worker")
+            return None
+        else:
+            print(f"\n⚠ Unexpected status code: {response.status_code}")
+            return None
+    except requests.exceptions.ConnectionError:
+        print("\n✗ Connection failed - Is the API server running?")
+        return None
+    except Exception as e:
+        print(f"\n✗ Error checking status: {e}")
+        print("\nYou can check status via:")
+        print("1. Database: SELECT * FROM workflow_executions WHERE run_id = '...';")
+        print("2. Celery logs: docker compose logs -f celery-worker")
+        return None
+
+
+def get_job_search_from_profile_input() -> Optional[Dict[str, Any]]:
+    """Get job search from profile input from user.
+
+    Returns:
+        Dictionary with job search from profile parameters, or None if invalid
+    """
+    print("\n" + "-" * 80)
+    print("Job Search from Profile Input")
+    print("-" * 80)
+
+    profile_id = input("Enter profile ID (UUID, required): ").strip()
+    if not profile_id:
+        print("Profile ID is required!")
+        return None
+
+    num_results_input = input(
+        "Enter number of results per search (default: 10): "
+    ).strip()
+    num_results = int(num_results_input) if num_results_input else 10
+
+    max_screening_input = input("Enter max screening per search (default: 3): ").strip()
+    max_screening = int(max_screening_input) if max_screening_input else 3
+
+    return {
+        "profile_id": profile_id,
+        "num_results": num_results,
+        "max_screening": max_screening,
+    }
+
+
 def display_menu():
     """Display interactive menu for test selection."""
     print("\n" + "=" * 80)
@@ -283,7 +503,11 @@ def display_menu():
     print("  1. Health Check - Test API health endpoint")
     print("  2. Profiling Workflow - Test profile creation")
     print("  3. Job Search Workflow - Test job search with profile")
-    print("  4. Full Flow - Run profiling then job search")
+    print(
+        "  4. Job Search from Profile - Test batch job search from profile's suggested titles"
+    )
+    print("  5. Full Flow - Run profiling then job search")
+    print("  6. Check Workflow Status - Check status of a workflow run")
     print()
     print("  0. Exit")
     print()
@@ -312,7 +536,7 @@ def interactive_main():
 
     while True:
         display_menu()
-        choice = input("Enter your choice (0-4): ").strip()
+        choice = input("Enter your choice (0-6): ").strip()
 
         if choice == "0":
             print("\nExiting...")
@@ -328,10 +552,18 @@ def interactive_main():
             if job_search_input:
                 test_job_search_workflow(**job_search_input)
         elif choice == "4":
+            job_search_from_profile_input = get_job_search_from_profile_input()
+            if job_search_from_profile_input:
+                test_job_search_from_profile(**job_search_from_profile_input)
+        elif choice == "5":
             # Full flow: profiling then job search
             print("\n" + "=" * 80)
             print("FULL FLOW: Profiling → Job Search")
             print("=" * 80)
+            print("\n⚠ Note: This flow now uses async Celery tasks.")
+            print("  The profiling workflow will be enqueued, and you'll need to")
+            print("  wait for it to complete before running job search.")
+            print("  Check Celery logs or database to see when profiling completes.\n")
 
             # Step 1: Profiling
             profiling_input = get_profiling_input()
@@ -342,27 +574,51 @@ def interactive_main():
             profiling_result = test_profiling_workflow(**profiling_input)
 
             if not profiling_result:
-                print("\n⚠ Profiling workflow failed. Cannot proceed with job search.")
+                print(
+                    "\n⚠ Profiling workflow failed to enqueue. Cannot proceed with job search."
+                )
                 continue
 
-            # Step 2: Job Search using created profile
-            profile_id = profiling_result.get("profile_id")
+            # Note: Since workflows are async, we can't extract profile_id immediately
+            # The user needs to wait for profiling to complete and get profile_id from database
+            print("\n" + "-" * 80)
+            print("⚠ IMPORTANT: Profiling workflow is running asynchronously")
+            print("-" * 80)
+            print("\nTo proceed with job search:")
+            print("1. Wait for profiling workflow to complete (check Celery logs)")
+            print("2. Query database to get the profile_id:")
+            print("   SELECT id FROM user_profiles ORDER BY created_at DESC LIMIT 1;")
+            print("3. Use that profile_id to run job search workflow")
+            print("\nAlternatively, you can:")
+            print("- Use an existing profile_id if you have one")
+            print("- Run job search workflow separately after profiling completes")
 
-            if profile_id:
-                print("\n" + "-" * 80)
-                print("Using created profile for job search...")
-                print(f"  Profile ID: {profile_id}")
-                print("-" * 80)
+            use_existing = (
+                input("\nDo you have a profile_id to use for job search? (y/n): ")
+                .strip()
+                .lower()
+            )
+            if use_existing == "y":
+                profile_id = input("Enter profile_id (UUID): ").strip()
+                if profile_id:
+                    print("\n" + "-" * 80)
+                    print("Using provided profile for job search...")
+                    print(f"  Profile ID: {profile_id}")
+                    print("-" * 80)
 
-                job_search_input = get_job_search_input()
-                if job_search_input:
-                    # Override with actual profile_id
-                    job_search_input["profile_id"] = profile_id
-                    test_job_search_workflow(**job_search_input)
+                    job_search_input = get_job_search_input()
+                    if job_search_input:
+                        # Override with provided profile_id
+                        job_search_input["profile_id"] = profile_id
+                        test_job_search_workflow(**job_search_input)
+        elif choice == "6":
+            run_id = input("\nEnter Run ID (UUID) to check status: ").strip()
+            if run_id:
+                check_workflow_status(run_id)
             else:
-                print("\n⚠ Could not extract profile_id from profiling result.")
+                print("⚠ Run ID is required")
         else:
-            print("\n❌ Invalid choice. Please enter a number between 0-4.")
+            print("\n❌ Invalid choice. Please enter a number between 0-6.")
             continue
 
         # Ask if user wants to continue
@@ -395,7 +651,7 @@ def main():
     parser = argparse.ArgumentParser(description="Test API endpoints")
     parser.add_argument(
         "--test",
-        choices=["health", "profiling", "job-search", "all"],
+        choices=["health", "profiling", "job-search", "job-search-from-profile", "all"],
         help="Which test to run (if not provided, shows interactive menu)",
     )
     parser.add_argument(
@@ -429,6 +685,7 @@ def main():
             test_profiling_workflow(
                 name="Test User",
                 email="test@example.com",
+                location="Hong Kong",
                 cv_urls=cv_urls,
                 basic_info="Software engineer with 5 years of experience",
             )
@@ -443,6 +700,17 @@ def main():
                 location="Hong Kong",
                 profile_id=profile_id,
                 num_results=5,
+                max_screening=3,
+            )
+    elif args.test == "job-search-from-profile":
+        # Note: You need to provide a valid profile_id from a previous profiling workflow run
+        print("⚠ Warning: job-search-from-profile test requires a valid profile_id.")
+        print("  Run profiling workflow first to get a profile_id, then use it here.")
+        profile_id = input("Enter profile_id (or press Enter to skip): ").strip()
+        if profile_id:
+            test_job_search_from_profile(
+                profile_id=profile_id,
+                num_results=10,
                 max_screening=3,
             )
     elif args.test == "all":
@@ -460,6 +728,7 @@ def main():
         profiling_result = test_profiling_workflow(
             name="Test User",
             email="test@example.com",
+            location="Hong Kong",
             cv_urls=cv_urls,
             basic_info="Software engineer with 5 years of experience",
         )

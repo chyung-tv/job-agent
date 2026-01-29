@@ -460,6 +460,9 @@ def save_user_profile_from_context(
         existing.references = references
         if pdf_paths:
             existing.source_pdfs = [str(p) for p in pdf_paths]
+        # Update location if available in context
+        if hasattr(context, "location"):
+            existing.location = context.location
         # Update suggested_job_titles if available in context
         if hasattr(context, "suggested_job_titles"):
             existing.suggested_job_titles = context.suggested_job_titles or []

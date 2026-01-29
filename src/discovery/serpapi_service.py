@@ -5,16 +5,20 @@ import uuid
 from typing import List, Optional, Dict, Any, Tuple, TYPE_CHECKING
 from serpapi import Client
 from .serpapi_models import SerpApiJobsResponse, JobResult
+from src.config import RESULTS_PER_PAGE
 from dotenv import load_dotenv
 
 if TYPE_CHECKING:
-    from src.workflow.base_context import JobSearchWorkflowContext as WorkflowContext  # Alias for backward compatibility
+    from src.workflow.base_context import (
+        JobSearchWorkflowContext as WorkflowContext,
+    )  # Alias for backward compatibility
 
 load_dotenv()
 
 # Optional database imports - only import if needed
 try:
     from src.database import db_session, GenericRepository, JobSearch, JobPosting
+
     DB_AVAILABLE = True
 except ImportError:
     DB_AVAILABLE = False
@@ -29,7 +33,7 @@ class SerpApiJobsService:
     - Do not include next_page_token in the initial request
     """
 
-    RESULTS_PER_PAGE = 10
+    RESULTS_PER_PAGE = RESULTS_PER_PAGE
 
     def __init__(self, api_key: Optional[str] = None):
         """Initialize the SerpAPI service.
@@ -80,38 +84,37 @@ class SerpApiJobsService:
 
     def _get_next_page_token(self, response: SerpApiJobsResponse) -> Optional[str]:
         """Safely extract next page token from response.
-        
+
         This method handles all edge cases:
         - Missing serpapi_pagination attribute
         - None pagination object
         - Missing next_page_token in pagination object
-        
+
         Args:
             response: The SerpApiJobsResponse object
-            
+
         Returns:
             Next page token string if available, None otherwise
         """
         try:
             # Check if response has the serpapi_pagination attribute
-            if not hasattr(response, 'serpapi_pagination'):
+            if not hasattr(response, "serpapi_pagination"):
                 return None
-            
+
             # Check if pagination object exists and is not None
             pagination = response.serpapi_pagination
             if pagination is None:
                 return None
-            
+
             # Check if next_page_token exists and is not None/empty
             token = pagination.next_page_token
             if token:
                 return token
-            
+
             return None
         except (AttributeError, TypeError):
             # Handle any unexpected attribute access errors gracefully
             return None
-
 
     def _save_jobs_to_db(
         self,
@@ -124,7 +127,7 @@ class SerpApiJobsService:
         job_search_id: Optional[uuid.UUID] = None,
     ) -> Optional[uuid.UUID]:
         """Save job search results to database.
-        
+
         Args:
             jobs: List of JobResult objects to save
             query: Search query
@@ -133,19 +136,19 @@ class SerpApiJobsService:
             hl: Language code
             gl: Country code
             job_search_id: Optional existing JobSearch ID, creates new if None
-            
+
         Returns:
             JobSearch UUID if successful, None otherwise
         """
         if not DB_AVAILABLE:
             return None
-            
+
         session_gen = db_session()
         session = next(session_gen)
         try:
             job_search_repo = GenericRepository(session, JobSearch)
             job_posting_repo = GenericRepository(session, JobPosting)
-            
+
             # Get or create JobSearch
             if job_search_id:
                 job_search = job_search_repo.get(str(job_search_id))
@@ -163,7 +166,7 @@ class SerpApiJobsService:
                 )
                 job_search = job_search_repo.create(job_search)
                 print(f"[DATABASE] Created JobSearch: {job_search.id}")
-            
+
             # Save each job posting
             saved_count = 0
             failed_count = 0
@@ -186,7 +189,7 @@ class SerpApiJobsService:
                         if job_result.apply_options
                         else None
                     )
-                    
+
                     job_posting = JobPosting(
                         id=uuid.uuid4(),
                         job_search_id=job_search.id,
@@ -207,7 +210,11 @@ class SerpApiJobsService:
                 except Exception as e:
                     failed_count += 1
                     # Truncate job_id for logging if it's too long
-                    job_id_display = job_result.job_id[:50] + "..." if job_result.job_id and len(job_result.job_id) > 50 else job_result.job_id
+                    job_id_display = (
+                        job_result.job_id[:50] + "..."
+                        if job_result.job_id and len(job_result.job_id) > 50
+                        else job_result.job_id
+                    )
                     print(f"[WARNING] Failed to save job posting {job_id_display}: {e}")
                     # Ensure session is rolled back and ready for next operation
                     try:
@@ -216,21 +223,22 @@ class SerpApiJobsService:
                     except Exception:
                         pass  # Session might already be rolled back or in invalid state
                     continue
-            
+
             if failed_count > 0:
                 print(f"[DATABASE] Failed to save {failed_count} job postings")
-            
+
             print(f"[DATABASE] Saved {saved_count}/{len(jobs)} job postings")
-            
+
             # Update job search with total count
             job_search.total_jobs_found = len(jobs)
             job_search_repo.update(job_search)
-            
+
             return job_search.id
-            
+
         except Exception as e:
             print(f"[ERROR] Database save failed: {e}")
             import traceback
+
             traceback.print_exc()
             session.rollback()
             raise e
@@ -246,23 +254,25 @@ class SerpApiJobsService:
         save_to_db: bool = True,
     ) -> "WorkflowContext":
         """Search for jobs using WorkflowContext (Context Object Pattern).
-        
+
         Updates the context with jobs and job_search_id.
-        
+
         Args:
             context: WorkflowContext object containing search parameters
             save_to_db: Whether to save results to database (default: True)
-            
+
         Returns:
             Updated WorkflowContext with jobs and job_search_id populated
         """
         if not context.validate_for_discovery():
             return context
-        
+
         all_jobs: List[JobResult] = []
 
         # Calculate number of pages needed (ceiling division)
-        num_pages = (context.num_results + self.RESULTS_PER_PAGE - 1) // self.RESULTS_PER_PAGE
+        num_pages = (
+            context.num_results + self.RESULTS_PER_PAGE - 1
+        ) // self.RESULTS_PER_PAGE
 
         # Get base parameters (without next_page_token)
         base_params = self._build_base_params(
@@ -297,7 +307,9 @@ class SerpApiJobsService:
             except Exception as e:
                 # Model validation failed - log detailed error and break
                 print(f"Model Validation Error on page {page_num + 1}: {e}")
-                print(f"Response keys: {list(results.as_dict().keys()) if hasattr(results, 'as_dict') else 'N/A'}")
+                print(
+                    f"Response keys: {list(results.as_dict().keys()) if hasattr(results, 'as_dict') else 'N/A'}"
+                )
                 break
 
             # Add jobs from this page
@@ -306,7 +318,7 @@ class SerpApiJobsService:
 
             # Check if we have enough results
             if len(all_jobs) >= context.num_results:
-                all_jobs = all_jobs[:context.num_results]
+                all_jobs = all_jobs[: context.num_results]
                 # Break early but still save to DB below
                 break
 
@@ -333,10 +345,10 @@ class SerpApiJobsService:
                 context.add_error(f"Failed to save jobs to database: {e}")
                 print(f"[WARNING] Failed to save jobs to database: {e}")
                 # Continue execution even if database save fails
-        
+
         context.jobs = all_jobs
         context.job_search_id = saved_job_search_id
-        
+
         return context
 
     @classmethod

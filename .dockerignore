@@ -40,3 +40,4 @@ data/
 # Docker
 docker-compose.yml
 Dockerfile
+Dockerfile.dev

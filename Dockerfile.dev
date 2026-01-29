@@ -1,0 +1,34 @@
+FROM python:3.13-slim
+
+WORKDIR /app
+
+# Install system dependencies (Postgres client + OpenCV runtime libs)
+RUN apt-get update && apt-get install -y \
+    libpq5 \
+    postgresql-client \
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxrender1 \
+    libxext6 \
+    libxcb1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY pyproject.toml uv.lock* ./
+RUN pip install --upgrade pip && \
+    (pip install uv && uv pip install --system .) || \
+    pip install -e .
+
+# Copy application code (will be mounted as volume in docker-compose)
+COPY . .
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
+
+# Expose ports
+EXPOSE 8000 5555
+
+# Default command (overridden in docker-compose)
+CMD ["uvicorn", "src.api.api:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
