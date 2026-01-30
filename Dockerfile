@@ -8,11 +8,9 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Install dependencies
+# Install dependencies with uv (faster, uses lock file)
 COPY pyproject.toml uv.lock* ./
-RUN pip install --upgrade pip && \
-    (pip install uv && uv pip install --system .) || \
-    pip install -e .
+RUN pip install --upgrade pip && pip install uv && uv pip install --system .
 
 # Stage 2: Runtime stage
 FROM python:3.13-slim

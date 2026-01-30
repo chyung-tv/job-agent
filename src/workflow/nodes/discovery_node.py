@@ -231,7 +231,9 @@ class DiscoveryNode(BaseNode):
         job_search.total_jobs_found = len(context.jobs)
         job_search_repo.update(job_search)
 
-    async def run(self, context: JobSearchWorkflowContext) -> JobSearchWorkflowContext:
+    async def _execute(
+        self, context: JobSearchWorkflowContext
+    ) -> JobSearchWorkflowContext:
         """Discover jobs using SerpAPI.
 
         Args:

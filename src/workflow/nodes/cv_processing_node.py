@@ -15,6 +15,7 @@ from src.workflow.profiling_context import ProfilingWorkflowContext
 from src.profiling.pdf_parser import PDFParser
 from src.database import GenericRepository, UserProfile
 from src.config import (
+    LangfuseConfig,
     DOWNLOAD_TIMEOUT_SEC,
     DOWNLOAD_MAX_BYTES,
     DEFAULT_NUM_JOB_TITLES,
@@ -24,6 +25,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+langfuse_config = LangfuseConfig.from_env()
 
 
 class ProfilingOutput(BaseModel):
@@ -200,7 +202,9 @@ class CVProcessingNode(BaseNode):
             self.logger.error(f"Failed to save profile to database: {e}")
             raise
 
-    async def run(self, context: ProfilingWorkflowContext) -> ProfilingWorkflowContext:
+    async def _execute(
+        self, context: ProfilingWorkflowContext
+    ) -> ProfilingWorkflowContext:
         """Process CV/PDF documents from URLs and build structured user profile.
 
         Args:
@@ -232,7 +236,11 @@ class CVProcessingNode(BaseNode):
         # Use AI agent to structure the profile
         self.logger.info("Building structured profile using AI...")
 
-        profiling_agent = Agent(model=self.model, output_type=ProfilingOutput)
+        profiling_agent = Agent(
+            model=self.model,
+            output_type=ProfilingOutput,
+            instrument=langfuse_config.enabled,
+        )
 
         # Combine user-provided basic info with CV content
         basic_info_section = ""

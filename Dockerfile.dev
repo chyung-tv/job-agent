@@ -14,11 +14,9 @@ RUN apt-get update && apt-get install -y \
     libxcb1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
+# Install Python dependencies with uv (faster, uses lock file)
 COPY pyproject.toml uv.lock* ./
-RUN pip install --upgrade pip && \
-    (pip install uv && uv pip install --system .) || \
-    pip install -e .
+RUN pip install --upgrade pip && pip install uv && uv pip install --system .
 
 # Copy application code (will be mounted as volume in docker-compose)
 COPY . .

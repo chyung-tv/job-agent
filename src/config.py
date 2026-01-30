@@ -5,6 +5,35 @@ Centralizing these values makes it easy to adjust limits and defaults without
 searching through multiple files.
 """
 
+import os
+from dataclasses import dataclass
+
+
+@dataclass
+class LangfuseConfig:
+    """Langfuse observability configuration."""
+
+    enabled: bool = True
+    public_key: str = ""
+    secret_key: str = ""
+    host: str = "https://cloud.langfuse.com"
+
+    @classmethod
+    def from_env(cls) -> "LangfuseConfig":
+        """Load configuration from environment variables."""
+        public_key = (os.getenv("LANGFUSE_PUBLIC_KEY") or "").strip()
+        secret_key = (os.getenv("LANGFUSE_SECRET_KEY") or "").strip()
+        host = (os.getenv("LANGFUSE_BASE_URL") or "https://cloud.langfuse.com").strip()
+        enabled_str = (os.getenv("LANGFUSE_ENABLED") or "true").strip().lower()
+        enabled = enabled_str == "true" and bool(public_key and secret_key)
+        return cls(
+            enabled=enabled,
+            public_key=public_key,
+            secret_key=secret_key,
+            host=host,
+        )
+
+
 # Job Search Workflow Limits (for API cost control)
 DEFAULT_NUM_RESULTS = 10  # Default number of job results to fetch
 DEFAULT_MAX_SCREENING = 5  # Default max jobs to screen/match (production)

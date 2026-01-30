@@ -69,6 +69,10 @@ services:
       NYLAS_API_URI: ${NYLAS_API_URI:-https://api.nylas.com}
       NYLAS_GRANT_ID: ${NYLAS_GRANT_ID:-}
       PDFBOLTS_API_KEY: ${PDFBOLTS_API_KEY:-}
+      # Langfuse (api uses workflows/LLM when triggering tasks)
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-https://us.cloud.langfuse.com}
       # Sentry / env (Phase 7+)
       SENTRY_DSN: ${SENTRY_DSN:-}
       ENVIRONMENT: ${ENVIRONMENT:-development}
@@ -118,6 +122,10 @@ services:
       NYLAS_API_URI: ${NYLAS_API_URI:-https://api.nylas.com}
       NYLAS_GRANT_ID: ${NYLAS_GRANT_ID:-}
       PDFBOLTS_API_KEY: ${PDFBOLTS_API_KEY:-}
+      # Langfuse (celery-worker runs workflows/LLM)
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-https://us.cloud.langfuse.com}
       # Sentry / env (Phase 7+)
       SENTRY_DSN: ${SENTRY_DSN:-}
       ENVIRONMENT: ${ENVIRONMENT:-development}

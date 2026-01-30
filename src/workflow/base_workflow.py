@@ -7,13 +7,15 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Optional, List, Dict, Any, TYPE_CHECKING
 
-from sqlalchemy.orm import Session
-
 from src.database import db_session, Run, WorkflowExecution
+from src.langfuse_utils import (
+    create_workflow_trace_context,
+    observe,
+    propagate_attributes,
+)
 
 if TYPE_CHECKING:
     from src.workflow.base_context import BaseContext
-    from src.workflow.base_node import BaseNode
 
 logger = logging.getLogger(__name__)
 
@@ -266,17 +268,55 @@ class BaseWorkflow(ABC):
             "execution_id": str(self._execution_id) if self._execution_id else None,
         }
 
-    @abstractmethod
+    @observe()
     async def run(self, context: "BaseContext") -> "BaseContext":
-        """Execute the workflow with custom logic.
+        """Execute the workflow with tracing and lifecycle; delegates to _execute().
 
-        Subclasses must implement this method to define their specific workflow flow.
-        Use _execute_node() to execute individual nodes with proper tracking.
-
-        Args:
-            context: The workflow context with input parameters
-
-        Returns:
-            Updated context with results
+        Subclasses implement _execute() with their specific node flow.
         """
+        trace_context = create_workflow_trace_context(
+            execution_id=str(self._execution_id) if self._execution_id else None,
+            run_id=str(context.run_id) if context.run_id else None,
+            workflow_type=self.workflow_type,
+            metadata={"workflow_class": self.__class__.__name__},
+        )
+        with propagate_attributes(**trace_context):
+            self.logger.info(f"Starting {self.workflow_type} workflow")
+            if not context.run_id:
+                try:
+                    self._create_run(context)
+                except Exception as e:
+                    context.add_error(f"Failed to create run: {e}")
+                    self.logger.error("Failed to create run: %s", e)
+                    return context
+            try:
+                self._log_workflow_start(context)
+            except Exception as e:
+                self.logger.warning("Failed to log workflow start: %s", e)
+            result = context
+            try:
+                result = await self._execute(context)
+            except Exception as e:
+                self.logger.error("Workflow execution failed: %s", e, exc_info=True)
+                if self._execution_id:
+                    self._update_workflow_execution(
+                        context,
+                        status="failed",
+                        error_message=str(e),
+                    )
+                raise
+            if self._execution_id:
+                final_status = "failed" if result.has_errors() else "completed"
+                self._update_workflow_execution(
+                    result,
+                    status=final_status,
+                    error_message="; ".join(result.errors)
+                    if result.has_errors()
+                    else None,
+                )
+            return result
+
+    @abstractmethod
+    async def _execute(self, context: "BaseContext") -> "BaseContext":
+        """Execute workflow-specific logic (node flow). Subclasses implement this."""
         pass

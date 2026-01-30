@@ -271,7 +271,9 @@ Focus on information that would help a candidate prepare for an interview with t
         # Persistence is handled in _research_company_for_job
         pass
 
-    async def run(self, context: JobSearchWorkflowContext) -> JobSearchWorkflowContext:
+    async def _execute(
+        self, context: JobSearchWorkflowContext
+    ) -> JobSearchWorkflowContext:
         """Research companies for matched jobs.
 
         Args:

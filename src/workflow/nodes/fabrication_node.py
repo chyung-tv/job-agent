@@ -72,7 +72,9 @@ class FabricationNode(BaseNode):
         # Persistence is handled by fabricate_matched_jobs_for_run
         pass
 
-    async def run(self, context: JobSearchWorkflowContext) -> JobSearchWorkflowContext:
+    async def _execute(
+        self, context: JobSearchWorkflowContext
+    ) -> JobSearchWorkflowContext:
         """Fabricate cover letters and CVs for matched jobs.
 
         Args:
