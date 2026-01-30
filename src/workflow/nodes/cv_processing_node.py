@@ -272,6 +272,8 @@ that match their skills, experience, and background. Consider:
 Documents:
 {raw_text}{basic_info_section}
 
+Output language: write the profile and all fields in the same language as the CV. If the CV is in Traditional Chinese, write in Traditional Chinese; if in English, write in English.
+
 Return a structured response with name, email, references (if any), a detailed profile, and 
 suggested_job_titles. Job titles should be specific and industry-standard (e.g., 
 'Full-Stack Developer', 'Data Scientist', 'Registered Chinese Medical Practitioner')."""

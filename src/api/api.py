@@ -101,8 +101,9 @@ async def run_job_search_workflow(context: JobSearchWorkflow.Context):
     session_gen = db_session()
     session = next(session_gen)
     try:
-        # Create Run record
-        run = Run(status="pending")
+        # Create Run record (tie to profile owner when profile_id provided for delivery email)
+        user_profile_id = getattr(context, "profile_id", None)
+        run = Run(status="pending", user_profile_id=user_profile_id)
         session.add(run)
         session.commit()
         session.refresh(run)
@@ -304,8 +305,8 @@ async def run_job_search_from_profile(
                     max_screening=request.max_screening,
                 )
 
-                # Create Run record
-                run = Run(status="pending")
+                # Create Run record (tie to profile owner for delivery email)
+                run = Run(status="pending", user_profile_id=request.profile_id)
                 session.add(run)
                 session.commit()
                 session.refresh(run)

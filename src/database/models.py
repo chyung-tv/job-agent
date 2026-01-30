@@ -52,6 +52,12 @@ class Run(Base):
         nullable=True,  # Nullable initially for migration
         doc="Reference to the job search workflow",
     )
+    user_profile_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("user_profiles.id", ondelete="SET NULL"),
+        nullable=True,
+        doc="Profile owner for this run (used to send delivery email to profile owner)",
+    )
 
     # Status tracking
     status = Column(
@@ -135,6 +141,9 @@ class Run(Base):
 
     # Relationships
     job_search = relationship("JobSearch", backref="runs")
+    user_profile = relationship(
+        "UserProfile", backref="runs", foreign_keys=[user_profile_id]
+    )
 
 
 class JobSearch(Base):

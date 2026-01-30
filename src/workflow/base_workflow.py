@@ -73,7 +73,8 @@ class BaseWorkflow(ABC):
         session_gen = db_session()
         session = next(session_gen)
         try:
-            run = Run(status="processing")
+            user_profile_id = getattr(context, "profile_id", None)
+            run = Run(status="processing", user_profile_id=user_profile_id)
             session.add(run)
             session.commit()
             session.refresh(run)

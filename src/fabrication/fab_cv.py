@@ -58,7 +58,9 @@ class CVFabricationAgent:
         Args:
             model: The AI model to use for CV generation
         """
-        self.agent = Agent(model=model, system_prompt=CV_SYSTEM_PROMPT, output_type=TailoredCV)
+        self.agent = Agent(
+            model=model, system_prompt=CV_SYSTEM_PROMPT, output_type=TailoredCV
+        )
 
     async def generate_tailored_cv(
         self,
@@ -67,6 +69,10 @@ class CVFabricationAgent:
         job_posting_company: str,
         job_posting_description: str,
         company_research: str,
+        applicant_name: Optional[str] = None,
+        applicant_email: Optional[str] = None,
+        applicant_phone: Optional[str] = None,
+        applicant_linkedin: Optional[str] = None,
     ) -> TailoredCV:
         """Generate a tailored CV based on user profile, job, and company research.
 
@@ -76,12 +82,33 @@ class CVFabricationAgent:
             job_posting_company: The company name
             job_posting_description: The full job description
             company_research: The company research results
+            applicant_name: Exact name to use (from DB); overrides LLM output if set
+            applicant_email: Exact email to use (from DB); overrides LLM output if set
+            applicant_phone: Phone to use if available (e.g. from references)
+            applicant_linkedin: LinkedIn URL to use if available (e.g. from references)
 
         Returns:
             TailoredCV object
         """
-        prompt = f"""Generate a tailored CV for this job application.
+        contact_block = ""
+        if applicant_name is not None or applicant_email is not None:
+            parts = []
+            if applicant_name is not None:
+                parts.append(f"Name: {applicant_name}")
+            if applicant_email is not None:
+                parts.append(f"Email: {applicant_email}")
+            if applicant_phone is not None:
+                parts.append(f"Phone: {applicant_phone}")
+            if applicant_linkedin is not None:
+                parts.append(f"LinkedIn: {applicant_linkedin}")
+            contact_block = (
+                "\n\nUse these exact contact details in the CV. Do not use placeholder or example.com addresses.\n"
+                + "\n".join(parts)
+                + "\n"
+            )
 
+        prompt = f"""Generate a tailored CV for this job application.
+{contact_block}
 USER PROFILE:
 {user_profile}
 
@@ -93,6 +120,8 @@ JOB POSTING:
 COMPANY RESEARCH:
 {company_research}
 
+Output language: write the entire CV (summary, section titles, entries, bullets) in the same language as the job description. If the job is in Traditional Chinese, write in Traditional Chinese; if in English, write in English.
+
 Generate a CV that:
 1. Highlights relevant experience and skills for this specific role
 2. Tailors the summary to match the job requirements
@@ -101,7 +130,19 @@ Generate a CV that:
 5. Omits irrelevant sections
 """
         result = await self.agent.run(prompt)
-        return result.output
+        output = result.output
+        overrides = {}
+        if applicant_name is not None:
+            overrides["name"] = applicant_name
+        if applicant_email is not None:
+            overrides["email"] = applicant_email
+        if applicant_phone is not None:
+            overrides["phone"] = applicant_phone
+        if applicant_linkedin is not None:
+            overrides["linkedin"] = applicant_linkedin
+        if overrides:
+            output = output.model_copy(update=overrides)
+        return output
 
 
 def render_cv_to_html(cv: TailoredCV) -> str:

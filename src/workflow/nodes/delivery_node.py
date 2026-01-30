@@ -16,6 +16,7 @@ from src.database import (
     JobPosting,
     CompanyResearch,
     Artifact,
+    UserProfile,
 )
 from src.delivery.nylas_service import NylasService
 from dotenv import load_dotenv
@@ -128,8 +129,11 @@ class DeliveryNode(BaseNode):
                     "company_name": job_posting.company_name,
                     "location": job_posting.location,
                     "job_description": job_posting.description,
-                    "match_reason": matched_job.reason,  # Add match reason
+                    "match_reason": matched_job.reason,
                     "application_link": matched_job.application_link,
+                    "apply_options": job_posting.apply_options
+                    if job_posting.apply_options
+                    else [],
                     "research": {
                         "id": str(company_research.id) if company_research else None,
                         "results": company_research.research_results
@@ -182,12 +186,23 @@ class DeliveryNode(BaseNode):
                 "status": "no_items",
             }
 
+        # Resolve recipient from run's profile owner (if run has user_profile_id)
+        run = session.query(Run).filter_by(id=uuid.UUID(run_id)).first()
+        recipient_email = None
+        if run and getattr(run, "user_profile_id", None):
+            profile = (
+                session.query(UserProfile).filter_by(id=run.user_profile_id).first()
+            )
+            if profile:
+                recipient_email = profile.email
+
         # Send email via Nylas
         try:
             nylas_service = NylasService()
             send_result = nylas_service.send_job_application_email(
                 session=session,
                 completed_items=completed_items,
+                recipient_email=recipient_email,
             )
 
             if send_result.get("success"):
@@ -196,8 +211,7 @@ class DeliveryNode(BaseNode):
                 )
                 self.logger.info(f"Message ID: {send_result.get('message_id')}")
 
-                # Update run delivery status
-                run = session.query(Run).filter_by(id=uuid.UUID(run_id)).first()
+                # Update run delivery status (run already loaded above)
                 if run:
                     run.delivery_triggered = True
                     run.delivery_triggered_at = datetime.utcnow()

@@ -33,7 +33,11 @@ from src.database.models import (
 from src.database.repository import GenericRepository
 from src.database.session import db_session
 from datetime import datetime
-from src.fabrication.fab_cv import CVFabricationAgent, render_cv_to_html, html_to_pdfbolt
+from src.fabrication.fab_cv import (
+    CVFabricationAgent,
+    render_cv_to_html,
+    html_to_pdfbolt,
+)
 
 
 class CoverLetterTopic(BaseModel):
@@ -115,6 +119,8 @@ JOB POSTING:
 COMPANY RESEARCH:
 {company_research}
 
+Output language: write the topic and summary in the same language as the job description. If the job is in Traditional Chinese, write in Traditional Chinese; if in English, write in English.
+
 Generate a compelling topic (a theme or angle) and a brief summary that connects the candidate's strengths to the job requirements and company values. The topic should be memorable and the summary should highlight the key message the cover letter should convey.
 """
         result = await self.topic_agent.run(prompt)
@@ -157,6 +163,8 @@ COMPANY RESEARCH:
 COVER LETTER TOPIC & SUMMARY:
 Topic: {topic.topic}
 Summary: {topic.summary}
+
+Output language: write the entire cover letter in the same language as the job description. If the job is in Traditional Chinese, write in Traditional Chinese; if in English, write in English.
 
 Write a professional cover letter that:
 1. Opens with a compelling hook that connects to the company's mission/values
@@ -234,6 +242,28 @@ def get_latest_user_profile(session: Session) -> Optional[UserProfile]:
     return latest_profiles[0] if latest_profiles else None
 
 
+def get_user_profile_for_run(session: Session, run_id: str) -> Optional[UserProfile]:
+    """Retrieve the user profile that owns the run (for correct name/email in CV and cover letter).
+
+    Uses run.user_profile_id when set; otherwise falls back to latest user profile.
+
+    Args:
+        session: SQLAlchemy database session
+        run_id: UUID of the run (as string)
+
+    Returns:
+        UserProfile if found, None otherwise
+    """
+    import uuid as uuid_module
+
+    run = session.query(Run).filter_by(id=uuid_module.UUID(run_id)).first()
+    if run and getattr(run, "user_profile_id", None):
+        profile = session.query(UserProfile).filter_by(id=run.user_profile_id).first()
+        if profile:
+            return profile
+    return get_latest_user_profile(session)
+
+
 def save_artifact(
     session: Session,
     matched_job_id: str,
@@ -242,23 +272,25 @@ def save_artifact(
 ) -> Artifact:
     """
     Save/update artifact with cover letter and/or CV data.
-    
+
     Args:
         session: SQLAlchemy database session
         matched_job_id: UUID of the matched job (as string)
         cover_letter_data: Optional dict with {"topic": {...}, "content": {...}}
         cv_pdf_url: Optional PDF URL from PdfBolt
-    
+
     Returns:
         Artifact: The saved artifact record
     """
     import uuid
-    
+
     # Check if artifact already exists
-    existing = session.query(Artifact).filter_by(
-        matched_job_id=uuid.UUID(matched_job_id)
-    ).first()
-    
+    existing = (
+        session.query(Artifact)
+        .filter_by(matched_job_id=uuid.UUID(matched_job_id))
+        .first()
+    )
+
     if existing:
         # Update existing
         if cover_letter_data is not None:
@@ -290,30 +322,32 @@ def save_cover_letter(
 ) -> CoverLetter:
     """
     Save cover letter to database (backward compatibility wrapper).
-    
+
     Also saves to Artifact table for unified storage.
-    
+
     Args:
         session: SQLAlchemy database session
         matched_job_id: UUID of the matched job (as string)
         topic: CoverLetterTopic object
         content: CoverLetterContent object
-    
+
     Returns:
         CoverLetter: The saved cover letter record
     """
     import uuid
-    
+
     cover_letter_data = {"topic": topic.model_dump(), "content": content.model_dump()}
-    
+
     # Save to Artifact table
     save_artifact(session, matched_job_id, cover_letter_data=cover_letter_data)
-    
+
     # Also save to CoverLetter table for backward compatibility
-    existing = session.query(CoverLetter).filter_by(
-        matched_job_id=uuid.UUID(matched_job_id)
-    ).first()
-    
+    existing = (
+        session.query(CoverLetter)
+        .filter_by(matched_job_id=uuid.UUID(matched_job_id))
+        .first()
+    )
+
     if existing:
         existing.topic = topic.model_dump()
         existing.content = content.model_dump()
@@ -357,18 +391,17 @@ async def fabricate_application_materials_for_job(
     matched_job.fabrication_status = "processing"
     matched_job.fabrication_attempts += 1
     session.commit()
-    
+
     # Initialize CV agent if not provided
     if cv_agent is None:
         # Use same model as cover letter agent
         cv_agent = CVFabricationAgent(model=cover_letter_agent.model)
-    
+
     print(f"\n{'=' * 80}")
     print(f"FABRICATING APPLICATION MATERIALS FOR: {matched_job.id}")
     print(f"{'=' * 80}")
-    
-    try:
 
+    try:
         # Step 1: Retrieve job posting
         print("\n1. Retrieving job posting...")
         job_posting = get_job_posting(session, str(matched_job.job_posting_id))
@@ -386,14 +419,21 @@ async def fabricate_application_materials_for_job(
                 f"   ⚠️  No company research found for job posting {matched_job.job_posting_id}"
             )
             print("   → Using job posting description only")
-            company_research = job_posting.description or "No company research available"
+            company_research = (
+                job_posting.description or "No company research available"
+            )
         else:
             print(f"   ✓ Found company research (ID: {company_research_obj.id})")
             company_research = company_research_obj.research_results
 
-        # Step 3: Retrieve user profile
+        # Step 3: Retrieve user profile (use run owner so CV/cover letter get correct name and email)
         print("\n3. Retrieving user profile...")
-        user_profile_obj = get_latest_user_profile(session)
+        if matched_job.run_id:
+            user_profile_obj = get_user_profile_for_run(
+                session, str(matched_job.run_id)
+            )
+        else:
+            user_profile_obj = get_latest_user_profile(session)
         if not user_profile_obj:
             raise ValueError("No user profile found in database")
         print(
@@ -422,29 +462,42 @@ async def fabricate_application_materials_for_job(
         print("   ✓ Cover letter generated successfully")
         print(f"   → Subject: {content.subject_line}")
         print(f"   → Body paragraphs: {len(content.body_paragraphs)}")
-        
-        # Step 6: Generate CV
+
+        # Step 6: Generate CV (pass applicant contact from DB so CV uses real email, not placeholders)
         print("\n6. Generating tailored CV...")
+        refs = user_profile_obj.references
+        applicant_phone = None
+        applicant_linkedin = None
+        if isinstance(refs, dict):
+            applicant_phone = refs.get("phone") or refs.get("phone_number")
+            applicant_linkedin = refs.get("linkedin") or refs.get("linkedin_url")
         cv = await cv_agent.generate_tailored_cv(
             user_profile=user_profile,
             job_posting_title=job_posting.title or "",
             job_posting_company=job_posting.company_name or "",
             job_posting_description=job_posting.description or "",
             company_research=company_research,
+            applicant_name=user_profile_obj.name,
+            applicant_email=user_profile_obj.email,
+            applicant_phone=applicant_phone,
+            applicant_linkedin=applicant_linkedin,
         )
         print("   ✓ CV generated successfully")
         print(f"   → Name: {cv.name}")
         print(f"   → Sections: {len(cv.sections)}")
-        
+
         # Step 7: Render CV to HTML and convert to PDF
         print("\n7. Converting CV to PDF via PdfBolt...")
         html = render_cv_to_html(cv)
         pdf_url = html_to_pdfbolt(html)
         print(f"   ✓ PDF generated: {pdf_url}")
-        
+
         # Step 8: Save to database
         print("\n8. Saving artifacts to database...")
-        cover_letter_data = {"topic": topic.model_dump(), "content": content.model_dump()}
+        cover_letter_data = {
+            "topic": topic.model_dump(),
+            "content": content.model_dump(),
+        }
         saved_artifact = save_artifact(
             session=session,
             matched_job_id=str(matched_job.id),
@@ -452,7 +505,7 @@ async def fabricate_application_materials_for_job(
             cv_pdf_url=pdf_url,
         )
         print(f"   ✓ Artifact saved (ID: {saved_artifact.id})")
-        
+
         # Also save cover letter to old table for backward compatibility
         saved_cover_letter = save_cover_letter(
             session=session,
@@ -460,22 +513,22 @@ async def fabricate_application_materials_for_job(
             topic=topic,
             content=content,
         )
-        
+
         # Update matched job status (only increment counter if status changed)
         was_completed = matched_job.fabrication_status == "completed"
         matched_job.fabrication_status = "completed"
         matched_job.fabrication_completed_at = datetime.utcnow()
         matched_job.fabrication_error = None
-        
+
         # Update run counters only if status changed from non-completed to completed
         if matched_job.run_id and not was_completed:
             run = session.query(Run).filter_by(id=matched_job.run_id).first()
             if run:
                 run.fabrication_completed_count += 1
                 session.commit()
-        
+
         session.commit()
-        
+
         return {
             "matched_job_id": str(matched_job.id),
             "job_posting_id": str(job_posting.id),
@@ -485,30 +538,38 @@ async def fabricate_application_materials_for_job(
             "content": content.model_dump(),
             "cv_pdf_url": pdf_url,
         }
-    
+
     except Exception as e:
         # Handle failure
         error_msg = str(e)
-        matched_job.fabrication_status = "failed" if matched_job.fabrication_attempts >= max_retries else "pending"
+        matched_job.fabrication_status = (
+            "failed" if matched_job.fabrication_attempts >= max_retries else "pending"
+        )
         matched_job.fabrication_error = error_msg
-        
+
         # Update run counters (only increment failed count if marking as failed for first time)
         was_failed = matched_job.fabrication_status == "failed"
-        if matched_job.run_id and matched_job.fabrication_attempts >= max_retries and not was_failed:
+        if (
+            matched_job.run_id
+            and matched_job.fabrication_attempts >= max_retries
+            and not was_failed
+        ):
             run = session.query(Run).filter_by(id=matched_job.run_id).first()
             if run:
                 run.fabrication_failed_count += 1
                 session.commit()
-        
+
         session.commit()
-        
-        print(f"   ❌ Fabrication failed (attempt {matched_job.fabrication_attempts}/{max_retries}): {error_msg}")
-        
+
+        print(
+            f"   ❌ Fabrication failed (attempt {matched_job.fabrication_attempts}/{max_retries}): {error_msg}"
+        )
+
         if matched_job.fabrication_attempts < max_retries:
             print("   → Will retry later")
         else:
             print("   → Max retries exceeded, marking as failed")
-        
+
         return None
 
 
@@ -520,53 +581,59 @@ async def fabricate_matched_jobs_for_run(
 ) -> Dict[str, int]:
     """
     Fabricate cover letters for all matched jobs in a run that have completed research.
-    
+
     Args:
         session: SQLAlchemy database session
         run_id: UUID of the run (as string)
         model: AI model to use for generation
         max_retries: Maximum number of retry attempts per job
-    
+
     Returns:
         Dictionary with counts: {'successful': int, 'failed': int, 'total': int}
     """
     import uuid
-    
+
     # Get all matched jobs for this run that have completed research
-    matched_jobs = session.query(MatchedJob).filter_by(
-        run_id=uuid.UUID(run_id),
-        research_status="completed"
-    ).all()
-    
+    matched_jobs = (
+        session.query(MatchedJob)
+        .filter_by(run_id=uuid.UUID(run_id), research_status="completed")
+        .all()
+    )
+
     if not matched_jobs:
         print(f"No matched jobs with completed research found for run {run_id}")
-        return {'successful': 0, 'failed': 0, 'total': 0}
-    
-    print(f"\n{'='*80}")
-    print(f"FABRICATING COVER LETTERS FOR {len(matched_jobs)} MATCHED JOBS (RUN {run_id})")
-    print(f"{'='*80}\n")
-    
+        return {"successful": 0, "failed": 0, "total": 0}
+
+    print(f"\n{'=' * 80}")
+    print(
+        f"FABRICATING COVER LETTERS FOR {len(matched_jobs)} MATCHED JOBS (RUN {run_id})"
+    )
+    print(f"{'=' * 80}\n")
+
     # Initialize agent
     agent = CoverLetterFabricationAgent(model=model)
-    
+
     successful = 0
     failed = 0
-    
+
     for i, matched_job in enumerate(matched_jobs, 1):
         print(f"\n[{i}/{len(matched_jobs)}] Processing matched job {matched_job.id}")
-        
+
         # Skip if already completed
         if matched_job.fabrication_status == "completed":
             print("   ⏭️  Fabrication already completed, skipping")
             successful += 1
             continue
-        
+
         # Skip if max retries exceeded
-        if matched_job.fabrication_attempts >= max_retries and matched_job.fabrication_status == "failed":
+        if (
+            matched_job.fabrication_attempts >= max_retries
+            and matched_job.fabrication_status == "failed"
+        ):
             print("   ⏭️  Max retries exceeded, skipping")
             failed += 1
             continue
-        
+
         # Perform fabrication
         cv_agent = CVFabricationAgent(model=model)
         result = await fabricate_application_materials_for_job(
@@ -576,25 +643,21 @@ async def fabricate_matched_jobs_for_run(
             cv_agent=cv_agent,
             max_retries=max_retries,
         )
-        
+
         if result:
             successful += 1
             print("   ✓ Fabrication completed successfully")
         else:
             failed += 1
-    
+
     print("\n" + "=" * 80)
     print("FABRICATION SUMMARY")
     print("=" * 80)
     print(f"Total: {len(matched_jobs)}")
     print(f"Successful: {successful}")
     print(f"Failed: {failed}")
-    
-    return {
-        'successful': successful,
-        'failed': failed,
-        'total': len(matched_jobs)
-    }
+
+    return {"successful": successful, "failed": failed, "total": len(matched_jobs)}
 
 
 async def fabricate_cover_letters_for_latest_jobs(
