@@ -127,6 +127,14 @@ IMPORTANT:
         if not job.title or not job.job_id:
             return None
 
+        # Langfuse propagated metadata values are limited (~200 chars); truncate long job_id (e.g. SerpAPI base64)
+        LANGFUSE_METADATA_MAX_LEN = 200
+        job_id_meta = (
+            (job.job_id[: LANGFUSE_METADATA_MAX_LEN - 3] + "...")
+            if job.job_id and len(job.job_id) > LANGFUSE_METADATA_MAX_LEN
+            else (job.job_id or "")
+        )
+
         try:
             trace_context = create_workflow_trace_context(
                 execution_id=str(context.run_id) if context.run_id else None,
@@ -134,7 +142,7 @@ IMPORTANT:
                 workflow_type="job_search",
                 node_name="MatchingNode",
                 metadata={
-                    "job_id": job.job_id,
+                    "job_id": job_id_meta,
                     "job_title": job.title,
                     "company_name": job.company_name,
                 },

@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any
 
 from src.celery_app import celery_app
@@ -27,21 +28,30 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 _langfuse_config = LangfuseConfig.from_env()
 
+_run_async_executor = ThreadPoolExecutor(
+    max_workers=4,
+    thread_name_prefix="run_async",
+)
+
 
 def run_async(coro):
     """Run async coroutine from sync context (e.g. Celery task).
 
-    Uses asyncio.run() when no loop is running (normal in Celery workers),
-    so each run gets a fresh event loop and we avoid "no current event loop"
-    and "event loop is closed" in Python 3.10+. If already inside a running
-    loop (e.g. tests), uses nest_asyncio and run_until_complete.
+    When no event loop is running (typical in Celery workers), runs the
+    coroutine in a dedicated thread via asyncio.run() so the loop is
+    isolated from the main thread. This avoids "Event loop is closed" and
+    "cannot reuse already awaited coroutine" when Celery retries or when
+    libraries hold references to a closed loop. When already inside a
+    running loop (e.g. tests, Jupyter), uses nest_asyncio and run_until_complete.
     """
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
-        # No running loop (Celery worker, script) - create and close a new one
-        return asyncio.run(coro)
-    # Already inside an event loop (e.g. Jupyter, nested call)
+        def _run():
+            return asyncio.run(coro)
+
+        future = _run_async_executor.submit(_run)
+        return future.result()
     import nest_asyncio
 
     nest_asyncio.apply()
