@@ -1,14 +1,30 @@
 """Test script for API endpoints with CLI interface."""
 
+import os
 import requests
 import json
 import sys
 import argparse
+from pathlib import Path
 from typing import Optional, Dict, Any
 
+from dotenv import load_dotenv
+
+# Load .env from project root so API_KEY is available
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 # API Configuration
 API_BASE_URL = "http://127.0.0.1:8000"
+
+
+def _headers(include_auth: bool = True) -> dict:
+    """Headers for requests. When include_auth is True, add API key from env (X-API-Key)."""
+    h = {"Content-Type": "application/json"}
+    if include_auth:
+        api_key = (os.environ.get("JOB_LAND_API_KEY") or "").strip()
+        if api_key:
+            h["X-API-Key"] = api_key
+    return h
 
 
 def test_health_check() -> bool:
@@ -81,10 +97,16 @@ def test_profiling_workflow(
         response = requests.post(
             f"{API_BASE_URL}/workflow/profiling",
             json=payload,
-            headers={"Content-Type": "application/json"},
+            headers=_headers(),
         )
 
         print(f"\nStatus Code: {response.status_code}")
+
+        if response.status_code == 401:
+            print(
+                "✗ API key missing or invalid. Set API_KEY in .env (or in your environment)."
+            )
+            return None
 
         if response.status_code == 202:
             result = response.json()
@@ -176,10 +198,16 @@ def test_job_search_workflow(
         response = requests.post(
             f"{API_BASE_URL}/workflow/job-search",
             json=payload,
-            headers={"Content-Type": "application/json"},
+            headers=_headers(),
         )
 
         print(f"\nStatus Code: {response.status_code}")
+
+        if response.status_code == 401:
+            print(
+                "✗ API key missing or invalid. Set API_KEY in .env (or in your environment)."
+            )
+            return None
 
         if response.status_code == 202:
             result = response.json()
@@ -312,10 +340,16 @@ def test_job_search_from_profile(
         response = requests.post(
             f"{API_BASE_URL}/workflow/job-search/from-profile",
             json=payload,
-            headers={"Content-Type": "application/json"},
+            headers=_headers(),
         )
 
         print(f"\nStatus Code: {response.status_code}")
+
+        if response.status_code == 401:
+            print(
+                "✗ API key missing or invalid. Set API_KEY in .env (or in your environment)."
+            )
+            return None
 
         if response.status_code == 202:
             result = response.json()
@@ -422,7 +456,13 @@ def check_workflow_status(run_id: str) -> Optional[Dict[str, Any]]:
     try:
         # Try to get status from API endpoint if it exists
         status_url = f"{API_BASE_URL}/workflow/status/{run_id}"
-        response = requests.get(status_url)
+        response = requests.get(status_url, headers=_headers())
+
+        if response.status_code == 401:
+            print(
+                "\n✗ API key missing or invalid. Set API_KEY in .env (or in your environment)."
+            )
+            return None
 
         if response.status_code == 200:
             result = response.json()

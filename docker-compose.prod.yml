@@ -1,0 +1,43 @@
+# Production overrides only. All services (postgres, redis, api, celery-worker, flower, caddy)
+# are defined in docker-compose.yml; their full config (image, environment, networks, etc.)
+# comes from the base file. This file only overrides: build, ports, volumes, command for prod.
+# Run with: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+services:
+  # Base defines postgres; we only remove host port exposure in prod.
+  postgres:
+    ports: []
+
+  # Base defines redis; we only remove host port exposure in prod. Redis still runs.
+  redis:
+    ports: []
+
+  # Base defines api with full environment (POSTGRES_*, REDIS_*, CELERY_*, API_KEY, etc.); we override build/ports/volumes/command only.
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports: []
+    volumes: []
+    command: ["uvicorn", "src.api.api:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+
+  # Base defines celery-worker with full environment (POSTGRES_*, REDIS_*, CELERY_*, API keys, etc.); we override build/volumes/command only.
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes: []
+    command: >
+      sh -c "
+        celery -A src.celery_app worker
+        --loglevel=info
+        --concurrency=2
+        --queues=high_priority,default
+      "
+
+  # Base defines flower (env, depends_on, networks); we override build and remove host port.
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports: []

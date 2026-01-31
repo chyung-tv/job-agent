@@ -1,0 +1,11 @@
+# API: set API_DOMAIN in .env (e.g. api.yourapp.com or localhost for local)
+{$API_DOMAIN} {
+	reverse_proxy api:8000
+}
+
+# Optional: to expose Flower, add the block below and set FLOWER_DOMAIN (and Basic Auth vars) in .env.
+# Generate hash: caddy hash-password  or  htpasswd -nbB user password
+# {$FLOWER_DOMAIN} {
+# 	basicauth * {$FLOWER_BASIC_AUTH_USER} {$FLOWER_BASIC_AUTH_HASH}
+# 	reverse_proxy flower:5555
+# }

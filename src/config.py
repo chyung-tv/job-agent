@@ -51,3 +51,11 @@ DOWNLOAD_MAX_BYTES = 10 * 1024 * 1024  # 10MB max PDF size
 
 # Profiling Settings
 DEFAULT_NUM_JOB_TITLES = 3  # Default number of job titles to suggest in profiling
+
+# Static API key for protected routes. Copy this value into your .env as API_KEY for local/testing.
+JOB_LAND_API_KEY = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+
+
+def get_api_key() -> str:
+    """Return the static API key (required for protected routes)."""
+    return JOB_LAND_API_KEY

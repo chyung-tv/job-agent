@@ -94,13 +94,20 @@ services:
       - job-agent-network
     command: ["uvicorn","src.api.api:app","--host","0.0.0.0","--port","8000","--reload","--reload-dir","/app/src"]
 
-  # Celery Worker (will be configured in Phase 2)
+  # Celery Worker
   celery-worker:
     build:
       context: .
       dockerfile: Dockerfile.dev
     container_name: job-agent-celery-worker
     restart: unless-stopped
+    healthcheck:
+      # Wait for worker to respond to inspect (worker loads onnxruntime etc. so give long start_period)
+      test: ["CMD-SHELL", "celery -A src.celery_app inspect ping || exit 1"]
+      interval: 15s
+      timeout: 10s
+      start_period: 90s
+      retries: 5
     environment:
       # Database
       POSTGRES_HOST: postgres
@@ -154,7 +161,7 @@ services:
         --reload
       "
 
-  # Flower - Celery Monitoring (will work after Phase 2)
+  # Flower - Celery Monitoring (starts after worker is healthy so inspect methods work)
   flower:
     build:
       context: .
@@ -171,15 +178,39 @@ services:
       redis:
         condition: service_healthy
       celery-worker:
-        condition: service_started
+        condition: service_healthy
     networks:
       - job-agent-network
     command: >
       sh -c "
-        celery -A src.celery_app flower 
-        --port=5555 
+        celery -A src.celery_app flower
+        --port=5555
         --broker=redis://redis:6379/0
+        --result_backend=redis://redis:6379/0
       "
+
+  # Caddy - reverse proxy and HTTPS (Caddyfile in repo; no Caddy on host)
+  caddy:
+    image: caddy:2-alpine
+    container_name: job-agent-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      API_DOMAIN: ${API_DOMAIN:-localhost}
+      FLOWER_DOMAIN: ${FLOWER_DOMAIN:-}
+      FLOWER_BASIC_AUTH_USER: ${FLOWER_BASIC_AUTH_USER:-}
+      FLOWER_BASIC_AUTH_HASH: ${FLOWER_BASIC_AUTH_HASH:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+    depends_on:
+      api:
+        condition: service_started
+      flower:
+        condition: service_started
+    networks:
+      - job-agent-network
 
 volumes:
   postgres_data:

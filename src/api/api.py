@@ -14,10 +14,11 @@ import logging
 from typing import Optional
 from uuid import UUID
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from src.config import get_api_key
 from src.workflow.job_search_workflow import JobSearchWorkflow
 from src.workflow.profiling_workflow import ProfilingWorkflow
 from src.workflow.base_context import JobSearchWorkflowContext
@@ -37,6 +38,27 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Job Agent API", version="1.0.0")
+
+
+def verify_api_key(request: Request) -> None:
+    """Validate API key from X-API-Key or Authorization: Bearer. Always required (no skip when empty)."""
+    expected = get_api_key()
+    if not expected:
+        raise HTTPException(
+            status_code=HTTPStatus.UNAUTHORIZED,
+            detail="API key not configured on server",
+        )
+    # Prefer X-API-Key, then Authorization: Bearer <key>
+    auth_header = request.headers.get("Authorization")
+    api_key_header = request.headers.get("X-API-Key")
+    provided = api_key_header
+    if not provided and auth_header and auth_header.lower().startswith("bearer "):
+        provided = auth_header[7:].strip()
+    if not provided or provided != expected:
+        raise HTTPException(
+            status_code=HTTPStatus.UNAUTHORIZED,
+            detail="API key missing or invalid",
+        )
 
 
 # Request/Response models for new endpoint
@@ -87,7 +109,10 @@ def send_job_search_completion_email(
 
 
 @app.post("/workflow/job-search", status_code=HTTPStatus.ACCEPTED)
-async def run_job_search_workflow(context: JobSearchWorkflow.Context):
+async def run_job_search_workflow(
+    context: JobSearchWorkflow.Context,
+    _: None = Depends(verify_api_key),
+):
     """Run the job search workflow asynchronously using Celery.
 
     Args:
@@ -156,7 +181,7 @@ async def run_job_search_workflow(context: JobSearchWorkflow.Context):
 
 
 @app.get("/")
-async def read_root():
+async def read_root(_: None = Depends(verify_api_key)):
     """Root endpoint."""
     return {"message": "Job Agent API", "version": "1.0.0"}
 
@@ -168,7 +193,10 @@ async def health_check():
 
 
 @app.post("/workflow/profiling", status_code=HTTPStatus.ACCEPTED)
-async def run_profiling_workflow(context: ProfilingWorkflow.Context):
+async def run_profiling_workflow(
+    context: ProfilingWorkflow.Context,
+    _: None = Depends(verify_api_key),
+):
     """Run the profiling workflow asynchronously using Celery.
 
     Args:
@@ -239,6 +267,7 @@ async def run_profiling_workflow(context: ProfilingWorkflow.Context):
 @app.post("/workflow/job-search/from-profile", status_code=HTTPStatus.ACCEPTED)
 async def run_job_search_from_profile(
     request: JobSearchFromProfileRequest,
+    _: None = Depends(verify_api_key),
 ) -> JobSearchFromProfileResponse:
     """Trigger multiple job searches from a profile's suggested job titles.
 
