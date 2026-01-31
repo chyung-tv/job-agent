@@ -262,7 +262,7 @@ You may want a **UI to access the database** locally and/or on the server.
 - **Supabase:**  
   - **Supabase Cloud:** Use Supabase’s managed Postgres and Studio in the browser; set `DATABASE_URL` to their connection string.  
   - **Supabase self-hosted (Docker):** Supabase provides a Docker-based stack (Postgres + Studio, etc.). You can run that stack if you want Supabase Studio; the job-agent app would point to that Postgres. Alternatively, keep our **postgres** service and add only a UI (e.g. pgAdmin) instead of the full Supabase stack.
-- **SSH tunnel + local client:** From your laptop: `ssh -L 5433:localhost:5432 user@your-vps-ip`. Connect DBeaver/pgAdmin to `localhost:5433` with your `POSTGRES_*` credentials. No extra services needed.
+- **SSH tunnel + local client:** From your laptop: `ssh -L 5433:127.0.0.1:5433 user@your-vps-ip` (production binds Postgres to host port 5433). Connect DBeaver/pgAdmin/TablePlus to `localhost:5433` with your `POSTGRES_*` credentials. No extra services needed.
 
 **Summary:** We self-host PostgreSQL in Docker Compose. For a UI, use pgAdmin in Docker, Supabase (Cloud or self-hosted Docker), or SSH tunnel + local GUI.
 

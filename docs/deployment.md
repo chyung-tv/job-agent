@@ -292,12 +292,12 @@ We do **not** use Supabase Studio. To look at the PostgreSQL database once in pr
 
 No extra services. From your **laptop**, open an SSH tunnel so that a local port forwards to Postgres on the server:
 
-1. **Postgres on server localhost:** In production, `docker-compose.prod.yml` already binds Postgres to `127.0.0.1:5432` on the server (not exposed to the internet). No change needed; just run `./start.sh --prod` as in the deploy steps.
+1. **Postgres on server localhost:** In production, `docker-compose.prod.yml` binds Postgres to `127.0.0.1:5433` on the server (host port 5433 → container 5432; avoids conflict with host port 5432). No change needed; just run `./start.sh --prod` as in the deploy steps.
 
 2. **From your laptop**, run (replace `user` and `<SERVER_IPv4>`):
 
    ```bash
-   ssh -L 5433:127.0.0.1:5432 user@<SERVER_IPv4>
+   ssh -L 5433:127.0.0.1:5433 user@<SERVER_IPv4>
    ```
 
    Keep this SSH session open.

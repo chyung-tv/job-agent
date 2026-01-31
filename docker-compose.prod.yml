@@ -4,9 +4,9 @@
 # Run with: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 
 services:
-  # Base defines postgres; bind to localhost only so you can use SSH tunnel + local client to view DB (see docs/deployment.md).
+  # Base defines postgres; bind to localhost:5433 on host (avoids conflict with host port 5432). Use SSH tunnel to 5433 (see docs/deployment.md).
   postgres:
-    ports: ["127.0.0.1:5432:5432"]
+    ports: ["127.0.0.1:5433:5432"]
 
   # Base defines redis; we only remove host port exposure in prod. Redis still runs.
   redis:
