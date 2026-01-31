@@ -254,6 +254,14 @@ git pull origin main
 ./start.sh --prod
 ```
 
+If you changed `.env` (e.g. Flower Basic Auth) and Caddy still crashes, force a full recreate so containers get the new env:
+
+```bash
+cd /opt/job-agent   # or ~/job-agent
+docker compose -f docker-compose.yml -f docker-compose.prod.yml down
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --force-recreate
+```
+
 Caddy will bind 80/443 and obtain TLS for `api.yourapp.com` and `flower.yourapp.com` automatically (DNS must already point to this server).
 
 ---

@@ -198,10 +198,10 @@ services:
       - "80:80"
       - "443:443"
     environment:
-      API_DOMAIN: ${API_DOMAIN:-localhost}
-      FLOWER_DOMAIN: ${FLOWER_DOMAIN:-}
-      FLOWER_BASIC_AUTH_USER: ${FLOWER_BASIC_AUTH_USER:-}
-      FLOWER_BASIC_AUTH_HASH: ${FLOWER_BASIC_AUTH_HASH:-}
+      - API_DOMAIN=${API_DOMAIN:-localhost}
+      - FLOWER_DOMAIN=${FLOWER_DOMAIN:-}
+      - FLOWER_BASIC_AUTH_USER=${FLOWER_BASIC_AUTH_USER:-}
+      - FLOWER_BASIC_AUTH_HASH=${FLOWER_BASIC_AUTH_HASH:-}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile
     depends_on:

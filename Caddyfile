@@ -5,7 +5,10 @@
 
 # Optional: to expose Flower, add the block below and set FLOWER_DOMAIN (and Basic Auth vars) in .env.
 # Generate hash: caddy hash-password  or  htpasswd -nbB user password
+# In .env escape bcrypt hash: use $$ for each $ (e.g. $$2y$$05$$...)
 {$FLOWER_DOMAIN} {
-	basicauth * {env.FLOWER_BASIC_AUTH_USER} {env.FLOWER_BASIC_AUTH_HASH}
+	basic_auth * {
+		{$FLOWER_BASIC_AUTH_USER} {$FLOWER_BASIC_AUTH_HASH}
+	}
 	reverse_proxy flower:5555
 }
