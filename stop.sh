@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Stop the job-agent stack (dev or prod). Use same flag as start.sh.
 # Usage: ./stop.sh [--dev|--prod]   (default: --dev)
+# For a full setup menu (migrations, overwrite, etc.), use ./setup.sh
 
 set -e
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Start the job-agent stack (dev or prod).
 # Usage: ./start.sh [--dev|--prod]   (default: --dev)
+# For a full setup menu (first-time, overwrite, migrations, etc.), use ./setup.sh
 
 set -e
 

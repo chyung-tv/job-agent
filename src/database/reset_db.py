@@ -9,14 +9,20 @@ from src.database.session import get_connection_string
 
 
 def reset_public_schema() -> None:
-    """Drop and re-create the public schema. All tables and data are removed."""
+    """Drop and re-create the public schema. All tables and data are removed.
+
+    Run as job_agent_admin (api container). Re-grants schema to admin and UI user
+    so alembic upgrade head and frontend can connect after reset.
+    """
     import os
     engine = create_engine(get_connection_string())
-    db_user = os.environ.get("POSTGRES_USER", "postgres")
+    admin_user = os.environ.get("POSTGRES_USER", "job_agent_admin")
+    ui_user = os.environ.get("POSTGRES_UI_USER", "job_agent_ui")
     with engine.connect() as conn:
         conn.execute(text("DROP SCHEMA IF EXISTS public CASCADE;"))
         conn.execute(text("CREATE SCHEMA public;"))
-        conn.execute(text(f"GRANT ALL ON SCHEMA public TO {db_user};"))
+        conn.execute(text(f"GRANT ALL ON SCHEMA public TO {admin_user};"))
+        conn.execute(text(f"GRANT USAGE ON SCHEMA public TO {ui_user};"))
         conn.execute(text("GRANT ALL ON SCHEMA public TO public;"))
         conn.commit()
     engine.dispose()

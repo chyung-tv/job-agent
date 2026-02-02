@@ -94,12 +94,17 @@ On a typical Hetzner VPS (e.g. 4–8 GB RAM):
 
 ### 1.2 Two Postgres users
 
-- [ ] Create **backend user** (e.g. `job_agent_admin`): full privileges on the application schema; used by backend `.env` and Alembic.
-- [ ] Create **frontend user** (e.g. `job_agent_ui`): `SELECT`, `INSERT`, `UPDATE` only on the same schema; **no** `CREATE`, `ALTER`, or `DROP`.
-- [ ] Grant the limited user the required privileges on existing (and future) tables.
-- [ ] Ensure backend `.env` (and `alembic/env.py`) use the **admin** user; reserve the **UI** user for frontend `DATABASE_URL` in Phase 2.
+- [x] Create **backend user** (e.g. `job_agent_admin`): full privileges on the application schema; used by backend `.env` and Alembic.
+- [x] Create **frontend user** (e.g. `job_agent_ui`): `SELECT`, `INSERT`, `UPDATE` only on the same schema; **no** `CREATE`, `ALTER`, or `DROP`.
+- [x] Grant the limited user the required privileges on existing (and future) tables.
+- [x] Ensure backend `.env` (and `alembic/env.py`) use the **admin** user; reserve the **UI** user for frontend `DATABASE_URL` in Phase 2.
 
 **Acceptance:** Migrations run with admin user; limited user can read/write but cannot run migrations.
+
+**Two-user setup (env and deployment):**
+
+- **New deployment:** The Postgres container bootstraps as user `postgres` using `POSTGRES_INIT_PASSWORD`. An init script in `scripts/init-db-users.sh` (mounted at `/docker-entrypoint-initdb.d/`) runs only when the data volume is empty and creates `job_agent_admin` and `job_agent_ui` with passwords from `POSTGRES_PASSWORD` and `POSTGRES_UI_PASSWORD`, then grants schema and default privileges. Set `.env` with `POSTGRES_USER=job_agent_admin`, `POSTGRES_PASSWORD=<admin password>`, `POSTGRES_INIT_PASSWORD=<bootstrap password>`, `POSTGRES_UI_USER=job_agent_ui`, `POSTGRES_UI_PASSWORD=<ui password>`. Start the stack so Postgres runs the init script, then run `./setup.sh` so migrations run as `job_agent_admin`.
+- **Existing deployment (volume already has data):** Init scripts do not run. Run the one-time SQL as `postgres` to create the two roles and grant on existing tables/sequences: `psql -v admin_pass='...' -v ui_pass='...' -d job_agent -f scripts/grant-two-users-existing-db.sql`. Then set `.env` to use `POSTGRES_USER=job_agent_admin` and `POSTGRES_PASSWORD=<admin password>`. No need to re-run migrations if the DB is already at head; optionally run `alembic stamp head` if you want Alembic to match current state.
 
 ### 1.3 Model consolidation (Run, WorkflowExecution, User, UserProfile)
 

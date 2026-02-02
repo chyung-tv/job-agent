@@ -50,21 +50,17 @@ Automated job search and application workflow: build a profile from your CV, dis
    # Edit .env: POSTGRES_*, REDIS, GEMINI_API_KEY, SERPAPI_KEY, API_KEY, etc.
    ```
 
-3. **Start the stack**
+3. **Run setup (menu or flags)**
    ```bash
-   ./start.sh          # dev (default)
-   # or
-   ./start.sh --prod   # with Caddy and production compose
+   ./setup.sh                    # Interactive menu: first-time, overwrite, migrations, start/stop, etc.
+   ./setup.sh --first-time       # First-time: start stack + run migrations (new DB)
+   ./setup.sh --migrate           # Apply migrations only (alembic upgrade head)
+   ./setup.sh --start             # Start stack (or use ./start.sh)
+   ./setup.sh --stop              # Stop stack (or use ./stop.sh)
    ```
+   Use `--dev` (default) or `--prod` with any flag. For a fresh DB with two Postgres users, run **First-time setup** from the menu or `./setup.sh --first-time`.
 
-4. **Create database tables (once)**
-   ```bash
-   ./setup.sh          # dev
-   # or
-   ./setup.sh --prod   # prod
-   ```
-
-5. **Call the API** (e.g. health, then a workflow)
+4. **Call the API** (e.g. health, then a workflow)
    ```bash
    curl -H "X-API-Key: YOUR_API_KEY" http://localhost:8000/health
    ```
