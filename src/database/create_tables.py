@@ -13,14 +13,14 @@ if str(project_root) not in sys.path:
 from src.database.session import Base, engine
 
 # Import all models to ensure they're registered with Base.metadata
+# Deprecated for setup: use `alembic upgrade head` instead.
 from src.database.models import (
     Run,
     JobSearch,
     JobPosting,
     MatchedJob,
-    UserProfile,
+    User,
     CompanyResearch,
-    CoverLetter,
     Artifact,
 )
 
@@ -70,23 +70,6 @@ def create_tables(overwrite: bool = False):
 
     # Create the tables
     Base.metadata.create_all(bind=engine)
-
-    # Add Run.user_profile_id if runs table exists but column is missing (existing DBs)
-    from sqlalchemy import text
-
-    inspector_after = inspect(engine)
-    if "runs" in inspector_after.get_table_names():
-        run_columns = [c["name"] for c in inspector_after.get_columns("runs")]
-        if "user_profile_id" not in run_columns:
-            print("Adding user_profile_id to runs table...")
-            with engine.connect() as conn:
-                conn.execute(
-                    text(
-                        "ALTER TABLE runs ADD COLUMN user_profile_id UUID REFERENCES user_profiles(id) ON DELETE SET NULL"
-                    )
-                )
-                conn.commit()
-            print("✓ user_profile_id column added to runs")
 
     print("✓ Tables created successfully!")
     print("\nYou can now:")

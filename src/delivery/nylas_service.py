@@ -9,7 +9,7 @@ from jinja2 import Environment, FileSystemLoader
 from nylas import Client
 from sqlalchemy.orm import Session
 
-from src.database import UserProfile
+from src.database import User
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -54,24 +54,24 @@ class NylasService:
         """
         try:
             if user_email:
-                # Try to find profile by email
-                profile = session.query(UserProfile).filter_by(email=user_email).first()
-                if profile:
+                # Try to find user by email
+                user = session.query(User).filter_by(email=user_email).first()
+                if user:
                     return {
-                        "name": profile.name,
-                        "email": profile.email,
+                        "name": user.name,
+                        "email": user.email,
                     }
 
-            # Fallback: Get latest user profile
-            profile = (
-                session.query(UserProfile)
-                .order_by(UserProfile.last_used_at.desc())
+            # Fallback: Get latest user (by last_used_at)
+            user = (
+                session.query(User)
+                .order_by(User.last_used_at.desc())
                 .first()
             )
-            if profile:
+            if user:
                 return {
-                    "name": profile.name,
-                    "email": profile.email,
+                    "name": user.name,
+                    "email": user.email,
                 }
         except Exception as e:
             logger.warning(f"Failed to get user profile: {e}")

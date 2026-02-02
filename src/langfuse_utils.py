@@ -38,8 +38,8 @@ def create_workflow_trace_context(
     """Create context attributes for Langfuse trace propagation.
 
     Args:
-        execution_id: WorkflowExecution ID
-        run_id: Run ID
+        execution_id: Optional; deprecated in favor of run_id
+        run_id: Run ID (and/or task_id in metadata)
         workflow_type: Type of workflow (profiling, job_search)
         node_name: Current node name
         user_id: User identifier (if available)

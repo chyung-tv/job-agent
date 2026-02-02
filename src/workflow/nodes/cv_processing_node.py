@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from src.workflow.base_node import BaseNode
 from src.workflow.profiling_context import ProfilingWorkflowContext
 from src.profiling.pdf_parser import PDFParser
-from src.database import GenericRepository, UserProfile
+from src.database import GenericRepository, User
 from src.config import (
     LangfuseConfig,
     DOWNLOAD_TIMEOUT_SEC,
@@ -167,12 +167,12 @@ class CVProcessingNode(BaseNode):
         try:
             source_urls = list(context.cv_urls) if context.cv_urls else []
 
-            profile_repo = GenericRepository(session, UserProfile)
+            user_repo = GenericRepository(session, User)
 
-            # Check if profile with this name and email already exists
-            existing = profile_repo.find_one(name=context.name, email=context.email)
+            # Check if user with this name and email already exists
+            existing = user_repo.find_one(name=context.name, email=context.email)
             if existing:
-                # Update existing profile
+                # Update existing user profile columns
                 existing.profile_text = context.user_profile
                 existing.location = context.location
                 if source_urls:
@@ -180,12 +180,12 @@ class CVProcessingNode(BaseNode):
                 if context.references:
                     existing.references = context.references
                 existing.suggested_job_titles = context.suggested_job_titles or []
-                profile_repo.update(existing)
-                context.profile_id = existing.id
-                self.logger.info(f"Updated existing user profile (ID: {existing.id})")
+                user_repo.update(existing)
+                context.user_id = existing.id
+                self.logger.info(f"Updated existing user (ID: {existing.id})")
             else:
-                # Create new profile
-                new_profile = UserProfile(
+                # Create new user (auth columns + profile columns)
+                new_user = User(
                     id=uuid.uuid4(),
                     name=context.name,
                     email=context.email,
@@ -195,9 +195,9 @@ class CVProcessingNode(BaseNode):
                     references=context.references,
                     suggested_job_titles=context.suggested_job_titles or [],
                 )
-                profile_repo.create(new_profile)
-                context.profile_id = new_profile.id
-                self.logger.info(f"Saved new user profile (ID: {new_profile.id})")
+                user_repo.create(new_user)
+                context.user_id = new_user.id
+                self.logger.info(f"Saved new user (ID: {new_user.id})")
         except Exception as e:
             self.logger.error(f"Failed to save profile to database: {e}")
             raise

@@ -402,22 +402,22 @@ def load_user_profile_from_context(
     Returns:
         Profile text if found, None otherwise
     """
-    from src.database.models import UserProfile
+    from src.database.models import User
     from datetime import datetime
 
     if not context.profile_name or not context.profile_email:
         return None
 
-    repo = GenericRepository(session, UserProfile)
-    profile = repo.find_one(name=context.profile_name, email=context.profile_email)
+    repo = GenericRepository(session, User)
+    user = repo.find_one(name=context.profile_name, email=context.profile_email)
 
-    if profile:
+    if user:
         print(
             f"[DATABASE] Found cached user profile for {context.profile_name} ({context.profile_email})"
         )
-        profile.last_used_at = datetime.utcnow()
-        repo.update(profile)
-        return profile.profile_text
+        user.last_used_at = datetime.utcnow()
+        repo.update(user)
+        return user.profile_text
 
     return None
 
@@ -437,9 +437,9 @@ def save_user_profile_from_context(
         pdf_paths: Optional list of PDF file paths
 
     Returns:
-        UserProfile UUID
+        User UUID
     """
-    from src.database.models import UserProfile
+    from src.database.models import User
 
     if (
         not context.user_profile
@@ -450,9 +450,9 @@ def save_user_profile_from_context(
             "Context must have user_profile, profile_name, and profile_email"
         )
 
-    repo = GenericRepository(session, UserProfile)
+    repo = GenericRepository(session, User)
 
-    # Check if profile exists
+    # Check if user exists
     existing = repo.find_one(name=context.profile_name, email=context.profile_email)
 
     if existing:
@@ -460,17 +460,24 @@ def save_user_profile_from_context(
         existing.references = references
         if pdf_paths:
             existing.source_pdfs = [str(p) for p in pdf_paths]
-        # Update location if available in context
         if hasattr(context, "location"):
             existing.location = context.location
-        # Update suggested_job_titles if available in context
         if hasattr(context, "suggested_job_titles"):
             existing.suggested_job_titles = context.suggested_job_titles or []
         repo.update(existing)
-        print(f"[DATABASE] Updated existing user profile (ID: {existing.id})")
+        print(f"[DATABASE] Updated existing user (ID: {existing.id})")
         return existing.id
     else:
-        new_profile = UserProfile.from_context(context, references, pdf_paths)
-        new_profile = repo.create(new_profile)
-        print(f"[DATABASE] Saved new user profile (ID: {new_profile.id})")
-        return new_profile.id
+        new_user = User(
+            id=uuid.uuid4(),
+            name=context.profile_name,
+            email=context.profile_email,
+            profile_text=context.user_profile,
+            references=references,
+            source_pdfs=[str(p) for p in pdf_paths] if pdf_paths else None,
+            location=getattr(context, "location", None) or "",
+            suggested_job_titles=getattr(context, "suggested_job_titles", None) or [],
+        )
+        new_user = repo.create(new_user)
+        print(f"[DATABASE] Saved new user (ID: {new_user.id})")
+        return new_user.id

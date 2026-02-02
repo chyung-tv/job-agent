@@ -30,7 +30,6 @@ from src.database import (
     MatchedJob,
     CompanyResearch,
     JobPosting,
-    WorkflowExecution,
     Artifact,
 )
 
@@ -88,7 +87,7 @@ async def test_profiling_workflow():
     result = await workflow.run(context)
 
     print(f"\n[RESULT]")
-    print(f"  - Profile ID: {result.profile_id}")
+    print(f"  - User ID: {result.user_id}")
     print(f"  - Profile name: {result.name}")
     print(f"  - Profile email: {result.email}")
     print(
@@ -479,19 +478,8 @@ async def test_complete_workflow():
                         print(
                             f"    - Delivery triggered: {run_record.delivery_triggered}"
                         )
-
-                        # Check WorkflowExecution record
-                        execution = (
-                            session.query(WorkflowExecution)
-                            .filter_by(run_id=result.run_id)
-                            .first()
-                        )
-                        if execution:
-                            print(f"\n  ✓ WorkflowExecution found:")
-                            print(f"    - Status: {execution.status}")
-                            print(f"    - Current node: {execution.current_node}")
-                            print(f"    - Started at: {execution.started_at}")
-                            print(f"    - Completed at: {execution.completed_at}")
+                        if run_record.task_id:
+                            print(f"    - Task ID: {run_record.task_id}")
 
                         # Check matched jobs status
                         matched_jobs = (

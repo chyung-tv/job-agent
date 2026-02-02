@@ -1,13 +1,12 @@
 """Base workflow class for flexible workflow orchestration."""
 
 import uuid
-import json
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Optional, List, Dict, Any, TYPE_CHECKING
 
-from src.database import db_session, Run, WorkflowExecution
+from src.database import db_session, Run
 from src.langfuse_utils import (
     create_workflow_trace_context,
     observe,
@@ -44,10 +43,12 @@ class BaseWorkflow(ABC):
     """Base class for all workflows providing common functionality.
 
     This class handles:
-    - Database logging and tracking (run creation, execution tracking)
+    - Database logging and tracking (run creation when context has no run_id)
     - Node execution with error handling
     - Execution history tracking
     - Workflow lifecycle management
+
+    Status updates for the run are done by Celery tasks via update_run_status.
     """
 
     def __init__(self, workflow_type: str = "generic"):
@@ -59,7 +60,6 @@ class BaseWorkflow(ABC):
         self.workflow_type = workflow_type
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
         self.execution_history: List[ExecutionRecord] = []
-        self._execution_id: Optional[uuid.UUID] = None
 
     def _create_run(self, context: "BaseContext") -> uuid.UUID:
         """Create a new run record in the database.
@@ -73,8 +73,8 @@ class BaseWorkflow(ABC):
         session_gen = db_session()
         session = next(session_gen)
         try:
-            user_profile_id = getattr(context, "profile_id", None)
-            run = Run(status="processing", user_profile_id=user_profile_id)
+            user_id = getattr(context, "user_id", None)
+            run = Run(status="processing", user_id=user_id)
             session.add(run)
             session.commit()
             session.refresh(run)
@@ -85,87 +85,6 @@ class BaseWorkflow(ABC):
             session.rollback()
             self.logger.error(f"Failed to create run: {e}")
             raise
-        finally:
-            try:
-                next(session_gen, None)
-            except StopIteration:
-                pass
-
-    def _log_workflow_start(self, context: "BaseContext") -> uuid.UUID:
-        """Log workflow execution start.
-
-        Args:
-            context: The workflow context
-
-        Returns:
-            WorkflowExecution ID
-        """
-        session_gen = db_session()
-        session = next(session_gen)
-        try:
-            execution = WorkflowExecution(
-                run_id=context.run_id,
-                workflow_type=self.workflow_type,
-                status="processing",
-                context_snapshot=json.loads(context.model_dump_json()),
-                started_at=datetime.utcnow(),
-            )
-            session.add(execution)
-            session.commit()
-            session.refresh(execution)
-            self._execution_id = execution.id
-            self.logger.info(f"Created workflow execution record: {execution.id}")
-            return execution.id
-        except Exception as e:
-            session.rollback()
-            self.logger.error(f"Failed to log workflow start: {e}")
-            raise
-        finally:
-            try:
-                next(session_gen, None)
-            except StopIteration:
-                pass
-
-    def _update_workflow_execution(
-        self,
-        context: "BaseContext",
-        current_node: Optional[str] = None,
-        status: Optional[str] = None,
-        error_message: Optional[str] = None,
-    ) -> None:
-        """Update workflow execution record.
-
-        Args:
-            context: The workflow context
-            current_node: Name of current node
-            status: Execution status
-            error_message: Error message if any
-        """
-        if not self._execution_id:
-            return
-
-        session_gen = db_session()
-        session = next(session_gen)
-        try:
-            execution = (
-                session.query(WorkflowExecution)
-                .filter_by(id=self._execution_id)
-                .first()
-            )
-            if execution:
-                execution.context_snapshot = json.loads(context.model_dump_json())
-                if current_node:
-                    execution.current_node = current_node
-                if status:
-                    execution.status = status
-                if error_message:
-                    execution.error_message = error_message
-                if status == "completed" or status == "failed":
-                    execution.completed_at = datetime.utcnow()
-                execution.updated_at = datetime.utcnow()
-                session.commit()
-        except Exception as e:
-            self.logger.warning(f"Failed to update workflow execution: {e}")
         finally:
             try:
                 next(session_gen, None)
@@ -183,17 +102,13 @@ class BaseWorkflow(ABC):
         Args:
             node: The node to execute
             context: The workflow context
-            update_db: Whether to update database execution record
+            update_db: Unused; kept for API compatibility. Status updates are in Celery tasks.
 
         Returns:
             Updated context after node execution
         """
         node_name = node.__class__.__name__
         self.logger.info(f"Executing node: {node_name}")
-
-        # Update execution record with current node
-        if update_db and self._execution_id:
-            self._update_workflow_execution(context, current_node=node_name)
 
         try:
             # Execute node
@@ -231,15 +146,6 @@ class BaseWorkflow(ABC):
                 )
             )
 
-            # Update execution record with error
-            if update_db and self._execution_id:
-                self._update_workflow_execution(
-                    context,
-                    current_node=node_name,
-                    status="failed",
-                    error_message=error_msg,
-                )
-
             # Re-raise to allow caller to handle
             raise
 
@@ -266,7 +172,6 @@ class BaseWorkflow(ABC):
             "successful_nodes": successful_nodes,
             "failed_nodes": failed_nodes,
             "execution_path": self.get_execution_path(),
-            "execution_id": str(self._execution_id) if self._execution_id else None,
         }
 
     @observe()
@@ -276,7 +181,6 @@ class BaseWorkflow(ABC):
         Subclasses implement _execute() with their specific node flow.
         """
         trace_context = create_workflow_trace_context(
-            execution_id=str(self._execution_id) if self._execution_id else None,
             run_id=str(context.run_id) if context.run_id else None,
             workflow_type=self.workflow_type,
             metadata={"workflow_class": self.__class__.__name__},
@@ -290,31 +194,12 @@ class BaseWorkflow(ABC):
                     context.add_error(f"Failed to create run: {e}")
                     self.logger.error("Failed to create run: %s", e)
                     return context
-            try:
-                self._log_workflow_start(context)
-            except Exception as e:
-                self.logger.warning("Failed to log workflow start: %s", e)
             result = context
             try:
                 result = await self._execute(context)
             except Exception as e:
                 self.logger.error("Workflow execution failed: %s", e, exc_info=True)
-                if self._execution_id:
-                    self._update_workflow_execution(
-                        context,
-                        status="failed",
-                        error_message=str(e),
-                    )
                 raise
-            if self._execution_id:
-                final_status = "failed" if result.has_errors() else "completed"
-                self._update_workflow_execution(
-                    result,
-                    status=final_status,
-                    error_message="; ".join(result.errors)
-                    if result.has_errors()
-                    else None,
-                )
             return result
 
     @abstractmethod

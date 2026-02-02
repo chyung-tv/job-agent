@@ -58,7 +58,7 @@ class JobSearchWorkflowContext(BaseContext):
     location: str
     num_results: int = DEFAULT_NUM_RESULTS
     max_screening: int = TESTING_MAX_SCREENING
-    profile_id: Optional[UUID] = None
+    user_id: Optional[UUID] = None
     google_domain: str = "google.com"
     hl: str = "en"
     gl: str = "us"
@@ -103,7 +103,7 @@ class JobSearchWorkflowContext(BaseContext):
         if not self.location or not self.location.strip():
             self.add_error("Location is required")
             return False
-        if not self.profile_id:
-            self.add_error("profile_id is required to retrieve user profile")
+        if not self.user_id:
+            self.add_error("user_id is required to retrieve user profile")
             return False
         return True

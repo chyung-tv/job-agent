@@ -16,7 +16,7 @@ from src.database import (
     JobPosting,
     CompanyResearch,
     Artifact,
-    UserProfile,
+    User,
 )
 from src.delivery.nylas_service import NylasService
 from dotenv import load_dotenv
@@ -186,15 +186,15 @@ class DeliveryNode(BaseNode):
                 "status": "no_items",
             }
 
-        # Resolve recipient from run's profile owner (if run has user_profile_id)
+        # Resolve recipient from run's user (if run has user_id)
         run = session.query(Run).filter_by(id=uuid.UUID(run_id)).first()
         recipient_email = None
-        if run and getattr(run, "user_profile_id", None):
-            profile = (
-                session.query(UserProfile).filter_by(id=run.user_profile_id).first()
+        if run and getattr(run, "user_id", None):
+            user = (
+                session.query(User).filter_by(id=run.user_id).first()
             )
-            if profile:
-                recipient_email = profile.email
+            if user:
+                recipient_email = user.email
 
         # Send email via Nylas
         try:

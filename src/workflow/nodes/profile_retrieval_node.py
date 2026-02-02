@@ -6,14 +6,14 @@ from datetime import datetime
 
 from src.workflow.base_node import BaseNode
 from src.workflow.base_context import JobSearchWorkflowContext
-from src.database import GenericRepository, UserProfile
+from src.database import GenericRepository, User
 
 
 class ProfileRetrievalNode(BaseNode):
     """Node for retrieving user profile from database.
 
-    This node loads an existing user profile from the database using
-    profile_id, and updates the job search workflow context.
+    This node loads an existing user from the database using user_id,
+    and updates the job search workflow context.
     """
 
     def _validate_context(self, context: JobSearchWorkflowContext) -> bool:
@@ -25,8 +25,8 @@ class ProfileRetrievalNode(BaseNode):
         Returns:
             True if valid, False otherwise
         """
-        if not context.profile_id:
-            context.add_error("profile_id is required to retrieve user profile")
+        if not context.user_id:
+            context.add_error("user_id is required to retrieve user profile")
             return False
         return True
 
@@ -41,23 +41,23 @@ class ProfileRetrievalNode(BaseNode):
             return
 
         try:
-            profile_repo = GenericRepository(session, UserProfile)
-            profile = profile_repo.get(context.profile_id)
+            user_repo = GenericRepository(session, User)
+            user = user_repo.get(str(context.user_id))
 
-            if profile:
-                context.user_profile = profile.profile_text
+            if user:
+                context.user_profile = user.profile_text
                 context.profile_was_cached = True
                 # Update last_used_at
-                profile.last_used_at = datetime.utcnow()
-                profile_repo.update(profile)
-                self.logger.info(f"Retrieved user profile (ID: {context.profile_id})")
+                user.last_used_at = datetime.utcnow()
+                user_repo.update(user)
+                self.logger.info(f"Retrieved user profile (ID: {context.user_id})")
             else:
                 context.add_error(
-                    f"User profile not found for profile_id: {context.profile_id}. "
+                    f"User not found for user_id: {context.user_id}. "
                     "Please create a profile first using ProfilingWorkflow."
                 )
                 self.logger.error(
-                    f"Profile not found for profile_id: {context.profile_id}"
+                    f"User not found for user_id: {context.user_id}"
                 )
         except Exception as e:
             self.logger.error(f"Failed to load profile from database: {e}")
@@ -69,7 +69,7 @@ class ProfileRetrievalNode(BaseNode):
         """Retrieve user profile from database.
 
         Args:
-            context: The workflow context with profile_id
+            context: The workflow context with user_id
 
         Returns:
             Updated context with profile information

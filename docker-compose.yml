@@ -85,6 +85,8 @@ services:
       - ./test:/app/test
       - ./docs:/app/docs
       - ./pyproject.toml:/app/pyproject.toml
+      # Mount alembic so setup.sh / migrations see latest versions (e.g. 002)
+      - ./alembic:/app/alembic
     depends_on:
       postgres:
         condition: service_healthy

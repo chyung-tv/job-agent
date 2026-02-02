@@ -12,7 +12,7 @@ load_dotenv()
 
 # Optional database imports
 try:
-    from src.database import db_session, GenericRepository, UserProfile
+    from src.database import db_session, GenericRepository, User
     DB_AVAILABLE = True
 except ImportError:
     DB_AVAILABLE = False
@@ -120,16 +120,15 @@ def _load_profile_from_db(name: str, email: str) -> Optional[str]:
         session_gen = db_session()
         session = next(session_gen)
         try:
-            profile_repo = GenericRepository(session, UserProfile)
-            # Find profile with matching name and email
-            profile = profile_repo.find_one(name=name, email=email)
-            if profile:
+            user_repo = GenericRepository(session, User)
+            # Find user with matching name and email
+            user = user_repo.find_one(name=name, email=email)
+            if user:
                 print(f"[DATABASE] Found cached user profile for {name} ({email})")
-                # Update last_used_at
                 from datetime import datetime
-                profile.last_used_at = datetime.utcnow()
-                profile_repo.update(profile)
-                return profile.profile_text
+                user.last_used_at = datetime.utcnow()
+                user_repo.update(user)
+                return user.profile_text
         finally:
             try:
                 next(session_gen, None)
@@ -166,21 +165,20 @@ def _save_profile_to_db(
         session_gen = db_session()
         session = next(session_gen)
         try:
-            profile_repo = GenericRepository(session, UserProfile)
+            user_repo = GenericRepository(session, User)
             
-            # Check if profile with this name and email already exists
-            existing = profile_repo.find_one(name=name, email=email)
+            # Check if user with this name and email already exists
+            existing = user_repo.find_one(name=name, email=email)
             if existing:
-                # Update existing profile
+                # Update existing user profile columns
                 existing.profile_text = profile_text
                 existing.references = references
                 existing.source_pdfs = pdf_paths_str
-                profile_repo.update(existing)
-                print(f"[DATABASE] Updated existing user profile (ID: {existing.id})")
+                user_repo.update(existing)
+                print(f"[DATABASE] Updated existing user (ID: {existing.id})")
             else:
-                # Create new profile
                 import uuid
-                new_profile = UserProfile(
+                new_user = User(
                     id=uuid.uuid4(),
                     name=name,
                     email=email,
@@ -188,8 +186,8 @@ def _save_profile_to_db(
                     references=references,
                     source_pdfs=pdf_paths_str,
                 )
-                profile_repo.create(new_profile)
-                print(f"[DATABASE] Saved new user profile (ID: {new_profile.id})")
+                user_repo.create(new_user)
+                print(f"[DATABASE] Saved new user (ID: {new_user.id})")
         finally:
             try:
                 next(session_gen, None)

@@ -161,7 +161,10 @@ IMPORTANT:
                 )
             return output
         except Exception as e:
-            self.logger.warning(f"Failed to match job {job.job_id}: {e}")
+            job_id_display = (
+                (job.job_id[:50] + "...") if job.job_id and len(job.job_id) > 50 else (job.job_id or "N/A")
+            )
+            self.logger.warning(f"Failed to match job {job_id_display}: {e}")
             return None
 
     def _load_data(self, context: JobSearchWorkflowContext, session) -> None:
@@ -206,6 +209,11 @@ IMPORTANT:
 
         matched_job_repo = GenericRepository(session, MatchedJob)
         job_posting_repo = GenericRepository(session, JobPosting)
+        job_search_repo = GenericRepository(session, JobSearch)
+
+        # Resolve user_id for scoping (from job_search or run/context)
+        job_search = job_search_repo.get(str(context.job_search_id))
+        user_id = job_search.user_id if job_search else getattr(context, "user_id", None)
 
         # Build mapping: job_id (str) -> JobPosting.id (UUID)
         postings = job_posting_repo.filter_by(job_search_id=context.job_search_id)
@@ -272,6 +280,7 @@ IMPORTANT:
                     job_description_summary=screening_output.job_description,
                     application_link=screening_output.application_link,
                     run_id=context.run_id,
+                    user_id=user_id,
                 )
                 matched_job_repo.create(matched_job)
                 saved_count += 1
@@ -291,8 +300,6 @@ IMPORTANT:
             self.logger.warning(f"Skipped {skipped_count} matched jobs")
 
         # Update JobSearch statistics
-        job_search_repo = GenericRepository(session, JobSearch)
-        job_search = job_search_repo.get(str(context.job_search_id))
         if job_search:
             job_search.jobs_screened = len(context.all_screening_results)
             job_search.matches_found = len(context.matched_results)

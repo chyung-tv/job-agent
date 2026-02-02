@@ -13,7 +13,6 @@ from sqlalchemy import (
     ForeignKey,
     Text,
     Integer,
-    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
@@ -26,6 +25,53 @@ if TYPE_CHECKING:
     )  # Alias for backward compatibility
     from src.discovery.serpapi_models import JobResult
     from src.matcher.matcher import JobScreeningOutput
+
+
+class User(Base):
+    """User table: Better Auth auth columns + job-agent profile columns.
+
+    Table name 'user' and camelCase column names (emailVerified, createdAt, updatedAt)
+    match Better Auth defaults for prismaAdapter. Profile columns are nullable until
+    the user runs the profiling workflow.
+    """
+
+    __tablename__ = "user"
+
+    id = Column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        doc="Unique identifier",
+    )
+    name = Column(String(255), nullable=False, default="", doc="Display name")
+    email = Column(String(255), nullable=False, default="", doc="Email address")
+    emailVerified = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        doc="Whether email is verified (Better Auth)",
+    )
+    image = Column(String(500), nullable=True, doc="Profile image URL")
+    createdAt = Column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+        doc="Created timestamp (Better Auth)",
+    )
+    updatedAt = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+        doc="Updated timestamp (Better Auth)",
+    )
+    # Profile columns (nullable)
+    location = Column(String(255), nullable=True, doc="Preferred job search location")
+    profile_text = Column(Text, nullable=True, doc="Structured profile text from PDFs")
+    suggested_job_titles = Column(JSON, nullable=True, doc="AI-suggested job titles")
+    source_pdfs = Column(JSON, nullable=True, doc="Source PDF paths")
+    references = Column(JSON, nullable=True, doc="References (LinkedIn, portfolio, etc.)")
+    last_used_at = Column(DateTime, nullable=True, doc="Last used in a job search")
 
 
 class Run(Base):
@@ -52,11 +98,18 @@ class Run(Base):
         nullable=True,  # Nullable initially for migration
         doc="Reference to the job search workflow",
     )
-    user_profile_id = Column(
+    user_id = Column(
         UUID(as_uuid=True),
-        ForeignKey("user_profiles.id", ondelete="SET NULL"),
+        ForeignKey("user.id", ondelete="SET NULL"),
         nullable=True,
-        doc="Profile owner for this run (used to send delivery email to profile owner)",
+        doc="User owner for this run (used to send delivery email)",
+    )
+
+    # Celery task id (for linking to Flower / task status)
+    task_id = Column(
+        String(255),
+        nullable=True,
+        doc="Celery task id for this run",
     )
 
     # Status tracking
@@ -141,9 +194,7 @@ class Run(Base):
 
     # Relationships
     job_search = relationship("JobSearch", backref="runs")
-    user_profile = relationship(
-        "UserProfile", backref="runs", foreign_keys=[user_profile_id]
-    )
+    user = relationship("User", backref="runs", foreign_keys=[user_id])
 
 
 class JobSearch(Base):
@@ -190,6 +241,14 @@ class JobSearch(Base):
         doc="Country code (e.g., 'us')",
     )
 
+    # Owner (user-scoped; nullable for legacy or unauthenticated flows)
+    user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+        doc="User who owns this job search",
+    )
+
     # Results summary
     total_jobs_found = Column(
         Integer,
@@ -223,6 +282,7 @@ class JobSearch(Base):
     )
 
     # Relationships
+    user = relationship("User", backref="job_searches", foreign_keys=[user_id])
     job_postings = relationship(
         "JobPosting", back_populates="job_search", cascade="all, delete-orphan"
     )
@@ -243,6 +303,7 @@ class JobSearch(Base):
         Returns:
             JobSearch instance
         """
+        user_id = getattr(context, "user_id", None)
         return cls(
             id=context.job_search_id or uuid.uuid4(),
             query=context.query,
@@ -251,6 +312,7 @@ class JobSearch(Base):
             hl=context.hl,
             gl=context.gl,
             total_jobs_found=total_jobs_found,
+            user_id=user_id,
         )
 
 
@@ -258,7 +320,8 @@ class JobSearch(Base):
 class JobPosting(Base):
     """Model representing a single job posting from SerpAPI.
 
-    Stores individual job results from job search queries.
+    Stores individual job results from job search queries. Company research
+    is associated via the company_research relationship (one-to-one per posting).
     """
 
     __tablename__ = "job_postings"
@@ -437,6 +500,12 @@ class MatchedJob(Base):
         nullable=True,  # Nullable initially for migration
         doc="Reference to the run that processes this matched job",
     )
+    user_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("user.id", ondelete="SET NULL"),
+        nullable=True,
+        doc="User who owns this matched job (denormalized for scoping)",
+    )
 
     # Match details from AI screening
     is_match = Column(
@@ -527,6 +596,7 @@ class MatchedJob(Base):
     )
 
     # Relationships
+    user = relationship("User", backref="matched_jobs", foreign_keys=[user_id])
     job_search = relationship("JobSearch", back_populates="matched_jobs")
     job_posting = relationship("JobPosting", back_populates="matched_job")
     run = relationship("Run", backref="matched_jobs")
@@ -556,144 +626,6 @@ class MatchedJob(Base):
             reason=output.reason,
             job_description_summary=output.job_description,
             application_link=output.application_link,
-        )
-
-
-class UserProfile(Base):
-    """UserProfile model to store the structured user profile.
-
-    Stores user information extracted from PDFs so the profiling step can check
-    if a profile exists under the same name and email before calling the LLM.
-    """
-
-    __tablename__ = "user_profiles"
-
-    # Primary key
-    id = Column(
-        UUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
-        doc="Unique identifier for the user profile",
-    )
-
-    # User identification (used for lookup)
-    name = Column(
-        String(255),
-        nullable=False,
-        doc="User's full name extracted from PDFs",
-    )
-
-    email = Column(
-        String(255),
-        nullable=False,
-        doc="User's email address extracted from PDFs",
-    )
-
-    location = Column(
-        String(255),
-        nullable=False,
-        doc="Preferred job search location for this profile",
-    )
-
-    # Unique constraint on name + email combination
-    __table_args__ = (
-        UniqueConstraint("name", "email", name="uq_user_profile_name_email"),
-    )
-
-    # Profile content
-    profile_text = Column(
-        Text,
-        nullable=False,
-        doc="Structured user profile text extracted from PDFs",
-    )
-
-    # Source information
-    references = Column(
-        JSON,
-        nullable=True,
-        doc="References like file names, URLs, LinkedIn profile, etc.",
-    )
-
-    source_pdfs = Column(
-        JSON,
-        nullable=True,
-        doc="List of PDF file paths used to generate this profile",
-    )
-
-    suggested_job_titles = Column(
-        JSON,
-        nullable=False,
-        doc="List of AI-suggested job titles for this profile",
-    )
-
-    # Timestamps
-    created_at = Column(
-        DateTime,
-        default=datetime.utcnow,
-        nullable=False,
-        doc="Timestamp when the profile was created",
-    )
-    updated_at = Column(
-        DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
-        nullable=False,
-        doc="Timestamp when the profile was last updated",
-    )
-
-    # Usage tracking
-    last_used_at = Column(
-        DateTime,
-        nullable=True,
-        doc="Timestamp when the profile was last used in a job search",
-    )
-
-    @classmethod
-    def from_context(
-        cls,
-        context: "WorkflowContext",
-        references: Optional[dict] = None,
-        pdf_paths: Optional[list] = None,
-    ) -> "UserProfile":
-        """Create a UserProfile instance from WorkflowContext.
-
-        Args:
-            context: WorkflowContext object containing profile information
-            references: Optional references (LinkedIn, portfolio, etc.)
-            pdf_paths: Optional list of PDF file paths (will be converted to strings)
-
-        Returns:
-            UserProfile instance
-
-        Raises:
-            ValueError: If context doesn't have required profile information
-        """
-        if (
-            not context.user_profile
-            or not context.profile_name
-            or not context.profile_email
-        ):
-            raise ValueError(
-                "Context must have user_profile, profile_name, and profile_email"
-            )
-
-        pdf_paths_str = [str(p) for p in pdf_paths] if pdf_paths else None
-
-        # Get suggested_job_titles from context if available, otherwise default to empty list
-        suggested_job_titles = getattr(context, "suggested_job_titles", None) or []
-
-        # Get location from context if available (for ProfilingWorkflowContext)
-        location = getattr(context, "location", None) or ""
-
-        return cls(
-            id=uuid.uuid4(),
-            name=context.profile_name,
-            email=context.profile_email,
-            location=location,
-            profile_text=context.user_profile,
-            references=references,
-            source_pdfs=pdf_paths_str,
-            suggested_job_titles=suggested_job_titles,
         )
 
 
@@ -763,65 +695,6 @@ class CompanyResearch(Base):
     job_posting = relationship("JobPosting", backref="company_research")
 
 
-class CoverLetter(Base):
-    """CoverLetter model to store fabricated cover letter results.
-
-    Stores the topic and complete content of cover letters generated
-    for matched jobs. Each matched job can have one cover letter.
-    """
-
-    __tablename__ = "cover_letters"
-
-    # Primary key
-    id = Column(
-        UUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
-        doc="Unique identifier for the cover letter",
-    )
-
-    # Foreign key
-    matched_job_id = Column(
-        UUID(as_uuid=True),
-        ForeignKey("matched_jobs.id", ondelete="CASCADE"),
-        nullable=False,
-        unique=True,  # One cover letter per matched job
-        doc="Reference to the matched job",
-    )
-
-    # Cover letter content
-    topic = Column(
-        JSON,
-        nullable=False,
-        doc="Cover letter topic and summary (stored as JSON from CoverLetterTopic)",
-    )
-
-    content = Column(
-        JSON,
-        nullable=False,
-        doc="Complete cover letter content (stored as JSON from CoverLetterContent)",
-    )
-
-    # Timestamps
-    created_at = Column(
-        DateTime,
-        nullable=False,
-        default=datetime.utcnow,
-        doc="Timestamp when the cover letter was created",
-    )
-
-    updated_at = Column(
-        DateTime,
-        nullable=False,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
-        doc="Timestamp when the cover letter was last updated",
-    )
-
-    # Relationship
-    matched_job = relationship("MatchedJob", backref="cover_letter")
-
-
 class Artifact(Base):
     """Unified model to store fabricated application materials for matched jobs.
 
@@ -881,93 +754,71 @@ class Artifact(Base):
     matched_job = relationship("MatchedJob", backref="artifact", uselist=False)
 
 
-class WorkflowExecution(Base):
-    """Unified model to track workflow execution state.
+# Better Auth tables (singular names, camelCase columns per Better Auth schema)
+class Session(Base):
+    __tablename__ = "session"
 
-    Provides a single table for tracking workflow execution across different
-    workflow types, storing context snapshots and execution status.
-    """
-
-    __tablename__ = "workflow_executions"
-
-    # Primary key
-    id = Column(
+    id = Column(String(255), primary_key=True, doc="Session ID (Better Auth)")
+    userId = Column(
         UUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
-        doc="Unique identifier for the workflow execution",
-    )
-
-    # Foreign key
-    run_id = Column(
-        UUID(as_uuid=True),
-        ForeignKey("runs.id", ondelete="CASCADE"),
+        ForeignKey("user.id", ondelete="CASCADE"),
         nullable=False,
-        doc="Reference to the run",
+        doc="User ID (Better Auth)",
     )
-
-    # Workflow metadata
-    workflow_type = Column(
-        String(255),
-        nullable=False,
-        doc="Type of workflow (e.g., 'job_search')",
-    )
-
-    # Status tracking
-    status = Column(
-        String(50),
-        nullable=False,
-        default="pending",
-        doc="Execution status: pending, processing, completed, failed",
-    )
-
-    current_node = Column(
-        String(255),
-        nullable=True,
-        doc="Name of the current node being executed",
-    )
-
-    # Context snapshot (stores complete context as JSON)
-    context_snapshot = Column(
-        JSON,
-        nullable=True,
-        doc="Complete snapshot of workflow context at this point in execution",
-    )
-
-    # Error tracking
-    error_message = Column(
-        Text,
-        nullable=True,
-        doc="Error message if execution failed",
-    )
-
-    # Timestamps
-    started_at = Column(
+    token = Column(String(255), nullable=False, doc="Session token")
+    expiresAt = Column(DateTime, nullable=False, doc="Expiration (Better Auth)")
+    ipAddress = Column(String(255), nullable=True, doc="IP address (Better Auth)")
+    userAgent = Column(String(500), nullable=True, doc="User agent (Better Auth)")
+    createdAt = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updatedAt = Column(
         DateTime,
-        nullable=True,
-        doc="Timestamp when workflow execution started",
-    )
-
-    completed_at = Column(
-        DateTime,
-        nullable=True,
-        doc="Timestamp when workflow execution completed",
-    )
-
-    created_at = Column(
-        DateTime,
-        nullable=False,
-        default=datetime.utcnow,
-        doc="Timestamp when the execution record was created",
-    )
-
-    updated_at = Column(
-        DateTime,
-        nullable=False,
         default=datetime.utcnow,
         onupdate=datetime.utcnow,
-        doc="Timestamp when the execution record was last updated",
+        nullable=False,
     )
+    user = relationship("User", backref="sessions")
 
-    # Relationship
-    run = relationship("Run", backref="workflow_executions")
+
+class Account(Base):
+    __tablename__ = "account"
+
+    id = Column(String(255), primary_key=True, doc="Account ID (Better Auth)")
+    userId = Column(
+        UUID(as_uuid=True),
+        ForeignKey("user.id", ondelete="CASCADE"),
+        nullable=False,
+        doc="User ID (Better Auth)",
+    )
+    accountId = Column(String(255), nullable=False, doc="Provider account ID")
+    providerId = Column(String(255), nullable=False, doc="Provider ID")
+    accessToken = Column(Text, nullable=True)
+    refreshToken = Column(Text, nullable=True)
+    accessTokenExpiresAt = Column(DateTime, nullable=True)
+    refreshTokenExpiresAt = Column(DateTime, nullable=True)
+    scope = Column(String(255), nullable=True)
+    idToken = Column(Text, nullable=True)
+    password = Column(String(255), nullable=True)
+    createdAt = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updatedAt = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+    user = relationship("User", backref="accounts")
+
+
+class Verification(Base):
+    __tablename__ = "verification"
+
+    id = Column(String(255), primary_key=True, doc="Verification ID (Better Auth)")
+    identifier = Column(String(255), nullable=False, doc="Identifier to verify")
+    value = Column(String(255), nullable=False, doc="Value to verify")
+    expiresAt = Column(DateTime, nullable=False, doc="Expiration")
+    createdAt = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updatedAt = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )

@@ -1,4 +1,10 @@
-"""Test script for API endpoints with CLI interface."""
+"""Test script for API endpoints with CLI interface.
+
+Local testing: ensure the API is running (e.g. via ./start.sh) and .env points to
+local Postgres. When running on the host (pytest or this script), use POSTGRES_HOST=localhost
+so you connect to the Postgres container exposed by Docker Compose (port 5432).
+Inside Docker Compose, services use POSTGRES_HOST=postgres (the service name).
+"""
 
 import os
 import requests
@@ -13,7 +19,7 @@ from dotenv import load_dotenv
 # Load .env from project root so API_KEY is available
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-# API Configuration
+# API Configuration (local default; override with --url when running as script)
 API_BASE_URL = "http://127.0.0.1:8000"
 
 
@@ -27,7 +33,7 @@ def _headers(include_auth: bool = True) -> dict:
     return h
 
 
-def test_health_check() -> bool:
+def run_health_check() -> bool:
     """Test the health check endpoint.
 
     Returns:
@@ -57,7 +63,7 @@ def test_health_check() -> bool:
         return False
 
 
-def test_profiling_workflow(
+def run_profiling_workflow(
     name: str,
     email: str,
     location: str,
@@ -113,7 +119,6 @@ def test_profiling_workflow(
             print("\n✓ Profiling workflow task enqueued successfully!")
             print("\nTask Metadata:")
             print(f"  - Run ID: {result.get('run_id')}")
-            print(f"  - Execution ID: {result.get('execution_id')}")
             print(f"  - Task ID: {result.get('task_id')}")
             print(f"  - Status: {result.get('status')}")
             print(
@@ -130,9 +135,9 @@ def test_profiling_workflow(
             print("   docker compose logs -f celery-worker")
             print("   # Or: docker logs -f job-agent-celery-worker")
             print("\n2. Check Database Status:")
-            print("   Query the 'workflow_executions' table:")
+            print("   Query the 'runs' table:")
             print(
-                f"   SELECT * FROM workflow_executions WHERE id = '{result.get('execution_id')}';"
+                f"   SELECT * FROM runs WHERE id = '{result.get('run_id')}';"
             )
             print("\n3. Check Task Status via API (if status endpoint exists):")
             print(f"   GET {API_BASE_URL}{result.get('status_url')}")
@@ -159,10 +164,10 @@ def test_profiling_workflow(
         return None
 
 
-def test_job_search_workflow(
+def run_job_search_workflow(
     query: str,
     location: str,
-    profile_id: str,
+    user_id: str,
     num_results: int = 10,
     max_screening: int = 5,
 ) -> Optional[Dict[str, Any]]:
@@ -171,7 +176,7 @@ def test_job_search_workflow(
     Args:
         query: Job search query
         location: Job search location
-        profile_id: UUID of the profile to retrieve
+        user_id: UUID of the user (from profiling or DB)
         num_results: Number of job results to fetch
         max_screening: Maximum number of jobs to screen
 
@@ -186,7 +191,7 @@ def test_job_search_workflow(
     payload = {
         "query": query,
         "location": location,
-        "profile_id": profile_id,
+        "user_id": user_id,
         "num_results": num_results,
         "max_screening": max_screening,
     }
@@ -214,7 +219,6 @@ def test_job_search_workflow(
             print("\n✓ Job search workflow task enqueued successfully!")
             print("\nTask Metadata:")
             print(f"  - Run ID: {result.get('run_id')}")
-            print(f"  - Execution ID: {result.get('execution_id')}")
             print(f"  - Task ID: {result.get('task_id')}")
             print(f"  - Status: {result.get('status')}")
             print(
@@ -231,9 +235,9 @@ def test_job_search_workflow(
             print("   docker compose logs -f celery-worker")
             print("   # Or: docker logs -f job-agent-celery-worker")
             print("\n2. Check Database Status:")
-            print("   Query the 'workflow_executions' table:")
+            print("   Query the 'runs' table:")
             print(
-                f"   SELECT * FROM workflow_executions WHERE id = '{result.get('execution_id')}';"
+                f"   SELECT * FROM runs WHERE id = '{result.get('run_id')}';"
             )
             print("\n3. Check Task Status via API (if status endpoint exists):")
             print(f"   GET {API_BASE_URL}{result.get('status_url')}")
@@ -307,15 +311,15 @@ def get_profiling_input() -> Optional[Dict[str, Any]]:
     }
 
 
-def test_job_search_from_profile(
-    profile_id: str,
+def run_job_search_from_profile(
+    user_id: str,
     num_results: int = 10,
     max_screening: int = 3,
 ) -> Optional[Dict[str, Any]]:
     """Test the job search from profile endpoint.
 
     Args:
-        profile_id: UUID of the profile to use for job searches
+        user_id: UUID of the user (from profiling or DB)
         num_results: Number of job results to fetch per search (default: 10)
         max_screening: Maximum number of jobs to screen per search (default: 3)
 
@@ -328,7 +332,7 @@ def test_job_search_from_profile(
 
     # Prepare request payload
     payload = {
-        "profile_id": profile_id,
+        "user_id": user_id,
         "num_results": num_results,
         "max_screening": max_screening,
     }
@@ -355,7 +359,7 @@ def test_job_search_from_profile(
             result = response.json()
             print("\nResponse:")
             print(f"  - Message: {result.get('message')}")
-            print(f"  - Profile ID: {result.get('profile_id')}")
+            print(f"  - User ID: {result.get('user_id')}")
             print(f"  - Location: {result.get('location')}")
             print(f"  - Job Titles Count: {result.get('job_titles_count')}")
             print(f"  - Job Titles: {result.get('job_titles')}")
@@ -373,10 +377,10 @@ def test_job_search_from_profile(
             print("   # Or: docker logs -f job-agent-celery-worker")
             print("\n2. Check Database Status:")
             print(
-                "   Query the 'workflow_executions' table for all job_search workflows:"
+                "   Query the 'runs' table for job_search workflows:"
             )
             print(
-                "   SELECT * FROM workflow_executions WHERE workflow_type = 'job_search' ORDER BY created_at DESC;"
+                "   SELECT * FROM runs ORDER BY created_at DESC;"
             )
             print("\n3. Check Redis Queue:")
             print("   docker exec -it job-agent-redis redis-cli")
@@ -434,7 +438,7 @@ def get_job_search_input() -> Dict[str, Any]:
     return {
         "query": query,
         "location": location,
-        "profile_id": profile_id,
+        "user_id": profile_id,
         "num_results": num_results,
         "max_screening": max_screening,
     }
@@ -468,7 +472,7 @@ def check_workflow_status(run_id: str) -> Optional[Dict[str, Any]]:
             result = response.json()
             print("\n✓ Status Retrieved:")
             print(f"  - Run ID: {result.get('run_id')}")
-            print(f"  - Execution ID: {result.get('execution_id')}")
+            print(f"  - Task ID: {result.get('task_id')}")
             print(f"  - Workflow Type: {result.get('workflow_type')}")
             print(f"  - Status: {result.get('status')}")
             print(f"  - Current Node: {result.get('current_node', 'N/A')}")
@@ -484,7 +488,7 @@ def check_workflow_status(run_id: str) -> Optional[Dict[str, Any]]:
             print(f"\n⚠ Status endpoint not found or run_id not found: {run_id}")
             print("\nYou can check status via:")
             print(
-                "1. Database: SELECT * FROM workflow_executions WHERE run_id = '...';"
+                "1. Database: SELECT * FROM runs WHERE id = '...';"
             )
             print("2. Celery logs: docker compose logs -f celery-worker")
             return None
@@ -497,7 +501,7 @@ def check_workflow_status(run_id: str) -> Optional[Dict[str, Any]]:
     except Exception as e:
         print(f"\n✗ Error checking status: {e}")
         print("\nYou can check status via:")
-        print("1. Database: SELECT * FROM workflow_executions WHERE run_id = '...';")
+        print("1. Database: SELECT * FROM runs WHERE id = '...';")
         print("2. Celery logs: docker compose logs -f celery-worker")
         return None
 
@@ -526,7 +530,7 @@ def get_job_search_from_profile_input() -> Optional[Dict[str, Any]]:
     max_screening = int(max_screening_input) if max_screening_input else 3
 
     return {
-        "profile_id": profile_id,
+        "user_id": profile_id,
         "num_results": num_results,
         "max_screening": max_screening,
     }
@@ -558,7 +562,7 @@ def interactive_main():
     global API_BASE_URL
 
     # Check API connection first
-    if not test_health_check():
+    if not run_health_check():
         print("\n⚠ API server is not running or not accessible.")
         print("  Start the server with: python -m src.api.api")
         print("  Or change API URL by editing API_BASE_URL in the script")
@@ -582,19 +586,19 @@ def interactive_main():
             print("\nExiting...")
             break
         elif choice == "1":
-            test_health_check()
+            run_health_check()
         elif choice == "2":
             profiling_input = get_profiling_input()
             if profiling_input:
-                test_profiling_workflow(**profiling_input)
+                run_profiling_workflow(**profiling_input)
         elif choice == "3":
             job_search_input = get_job_search_input()
             if job_search_input:
-                test_job_search_workflow(**job_search_input)
+                run_job_search_workflow(**job_search_input)
         elif choice == "4":
             job_search_from_profile_input = get_job_search_from_profile_input()
             if job_search_from_profile_input:
-                test_job_search_from_profile(**job_search_from_profile_input)
+                run_job_search_from_profile(**job_search_from_profile_input)
         elif choice == "5":
             # Full flow: profiling then job search
             print("\n" + "=" * 80)
@@ -611,7 +615,7 @@ def interactive_main():
                 print("Skipping full flow test due to invalid profiling input.")
                 continue
 
-            profiling_result = test_profiling_workflow(**profiling_input)
+            profiling_result = run_profiling_workflow(**profiling_input)
 
             if not profiling_result:
                 print(
@@ -648,9 +652,9 @@ def interactive_main():
 
                     job_search_input = get_job_search_input()
                     if job_search_input:
-                        # Override with provided profile_id
-                        job_search_input["profile_id"] = profile_id
-                        test_job_search_workflow(**job_search_input)
+                        # Override with provided user_id (from profiling or DB)
+                        job_search_input["user_id"] = profile_id
+                        run_job_search_workflow(**job_search_input)
         elif choice == "6":
             run_id = input("\nEnter Run ID (UUID) to check status: ").strip()
             if run_id:
@@ -670,6 +674,14 @@ def interactive_main():
             if continue_choice == "q":
                 print("\nExiting...")
                 break
+
+
+# --- Pytest-collectible tests (no fixture-like params) for local API testing ---
+
+
+def test_health_check():
+    """Pytest entry: call health check against local API (requires API running)."""
+    assert run_health_check(), "Health check failed; ensure API is running (e.g. ./start.sh)"
 
 
 def main():
@@ -714,7 +726,7 @@ def main():
     if not args.test:
         interactive_main()
     elif args.test == "health":
-        test_health_check()
+        run_health_check()
     elif args.test == "profiling":
         cv_urls = [u.strip() for u in (args.cv_urls or "").split(",") if u.strip()]
         if not cv_urls:
@@ -722,7 +734,7 @@ def main():
             print("  Example: --test profiling --cv-urls 'https://example.com/cv.pdf'")
             print("  Or run without --test to use the interactive menu.")
         else:
-            test_profiling_workflow(
+            run_profiling_workflow(
                 name="Test User",
                 email="test@example.com",
                 location="Hong Kong",
@@ -735,10 +747,10 @@ def main():
         print("  Run profiling workflow first to get a profile_id, then use it here.")
         profile_id = input("Enter profile_id (or press Enter to skip): ").strip()
         if profile_id:
-            test_job_search_workflow(
+            run_job_search_workflow(
                 query="software engineer",
                 location="Hong Kong",
-                profile_id=profile_id,
+                user_id=profile_id,
                 num_results=5,
                 max_screening=3,
             )
@@ -748,14 +760,14 @@ def main():
         print("  Run profiling workflow first to get a profile_id, then use it here.")
         profile_id = input("Enter profile_id (or press Enter to skip): ").strip()
         if profile_id:
-            test_job_search_from_profile(
-                profile_id=profile_id,
+            run_job_search_from_profile(
+                user_id=profile_id,
                 num_results=10,
                 max_screening=3,
             )
     elif args.test == "all":
         # Run all tests in sequence
-        if not test_health_check():
+        if not run_health_check():
             print("\n⚠ Health check failed. Please ensure the API server is running.")
             return
 
@@ -765,7 +777,7 @@ def main():
             print("  Example: --test all --cv-urls 'https://example.com/cv.pdf'")
             return
 
-        profiling_result = test_profiling_workflow(
+        profiling_result = run_profiling_workflow(
             name="Test User",
             email="test@example.com",
             location="Hong Kong",
@@ -774,13 +786,13 @@ def main():
         )
 
         if profiling_result:
-            profile_id = profiling_result.get("profile_id")
+            user_id_from_profiling = profiling_result.get("user_id")
 
-            if profile_id:
-                test_job_search_workflow(
+            if user_id_from_profiling:
+                run_job_search_workflow(
                     query="software engineer",
                     location="Hong Kong",
-                    profile_id=profile_id,
+                    user_id=user_id_from_profiling,
                     num_results=5,
                     max_screening=3,
                 )

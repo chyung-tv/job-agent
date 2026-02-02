@@ -30,7 +30,7 @@ class ProfilingWorkflowContext(BaseContext):
 
     # ========== Final Output ==========
     user_profile: Optional[str] = None
-    profile_id: Optional[UUID] = None
+    user_id: Optional[UUID] = None
     references: Optional[dict] = None
     suggested_job_titles: Optional[List[str]] = Field(
         default=None,

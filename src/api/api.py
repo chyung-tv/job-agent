@@ -25,9 +25,8 @@ from src.workflow.base_context import JobSearchWorkflowContext
 from src.database import (
     db_session,
     GenericRepository,
-    UserProfile,
+    User,
     Run,
-    WorkflowExecution,
 )
 from src.config import DEFAULT_NUM_RESULTS, TESTING_MAX_SCREENING
 from src.tasks.profiling_task import execute_profiling_workflow
@@ -65,7 +64,7 @@ def verify_api_key(request: Request) -> None:
 class JobSearchFromProfileRequest(BaseModel):
     """Request model for job search from profile endpoint."""
 
-    profile_id: UUID = Field(..., description="UUID of the user profile")
+    user_id: UUID = Field(..., description="UUID of the user")
     num_results: Optional[int] = Field(
         default=DEFAULT_NUM_RESULTS,
         description="Number of job results to fetch per search",
@@ -80,14 +79,14 @@ class JobSearchFromProfileResponse(BaseModel):
     """Response model for job search from profile endpoint."""
 
     message: str
-    profile_id: UUID
+    user_id: UUID
     location: str
     job_titles_count: int
     job_titles: list[str]
 
 
 def send_job_search_completion_email(
-    profile_id: UUID,
+    user_id: UUID,
     job_titles: list[str],
     results: dict,
 ) -> None:
@@ -97,12 +96,12 @@ def send_job_search_completion_email(
     For now, it just logs the completion.
 
     Args:
-        profile_id: UUID of the profile
+        user_id: UUID of the user
         job_titles: List of job titles that were searched
         results: Dictionary with search results summary
     """
     logger.info(
-        f"Job searches completed for profile {profile_id}. "
+        f"Job searches completed for user {user_id}. "
         f"Titles: {job_titles}. Results: {results}"
     )
     # TODO: Implement actual email sending
@@ -126,9 +125,9 @@ async def run_job_search_workflow(
     session_gen = db_session()
     session = next(session_gen)
     try:
-        # Create Run record (tie to profile owner when profile_id provided for delivery email)
-        user_profile_id = getattr(context, "profile_id", None)
-        run = Run(status="pending", user_profile_id=user_profile_id)
+        # Create Run record (tie to user when user_id provided for delivery email)
+        user_id = getattr(context, "user_id", None)
+        run = Run(status="pending", user_id=user_id)
         session.add(run)
         session.commit()
         session.refresh(run)
@@ -136,22 +135,15 @@ async def run_job_search_workflow(
         # Set run_id in context
         context.run_id = run.id
 
-        # Create WorkflowExecution record (status: pending)
-        execution = WorkflowExecution(
-            run_id=run.id,
-            workflow_type="job_search",
-            status="pending",
-            context_snapshot=context.model_dump(mode="json"),
-        )
-        session.add(execution)
-        session.commit()
-        session.refresh(execution)
-
         # Enqueue Celery task
         task = execute_job_search_workflow.delay(
             context_data=context.model_dump(mode="json"),
-            execution_id=str(execution.id),
+            run_id=str(run.id),
         )
+
+        # Store task_id on run
+        run.task_id = task.id
+        session.commit()
 
         logger.info(f"Enqueued job search workflow task {task.id} for run {run.id}")
 
@@ -160,7 +152,6 @@ async def run_job_search_workflow(
             status_code=HTTPStatus.ACCEPTED,
             content={
                 "run_id": str(run.id),
-                "execution_id": str(execution.id),
                 "task_id": task.id,
                 "status": "pending",
                 "status_url": f"/workflow/status/{run.id}",
@@ -204,7 +195,7 @@ async def run_profiling_workflow(
             and optional basic_info. The backend downloads and parses PDFs from the URLs.
 
     Returns:
-        202 Accepted with run_id, execution_id, task_id, status, status_url, and estimated_completion_time
+        202 Accepted with run_id, task_id, status, status_url, and estimated_completion_time
     """
     logger.info("Received profiling workflow request")
 
@@ -220,22 +211,15 @@ async def run_profiling_workflow(
         # Set run_id in context
         context.run_id = run.id
 
-        # Create WorkflowExecution record (status: pending)
-        execution = WorkflowExecution(
-            run_id=run.id,
-            workflow_type="profiling",
-            status="pending",
-            context_snapshot=context.model_dump(mode="json"),
-        )
-        session.add(execution)
-        session.commit()
-        session.refresh(execution)
-
         # Enqueue Celery task
         task = execute_profiling_workflow.delay(
             context_data=context.model_dump(mode="json"),
-            execution_id=str(execution.id),
+            run_id=str(run.id),
         )
+
+        # Store task_id on run
+        run.task_id = task.id
+        session.commit()
 
         logger.info(f"Enqueued profiling workflow task {task.id} for run {run.id}")
 
@@ -244,7 +228,6 @@ async def run_profiling_workflow(
             status_code=HTTPStatus.ACCEPTED,
             content={
                 "run_id": str(run.id),
-                "execution_id": str(execution.id),
                 "task_id": task.id,
                 "status": "pending",
                 "status_url": f"/workflow/status/{run.id}",
@@ -277,10 +260,10 @@ async def run_job_search_from_profile(
     3. Enqueues Celery tasks to execute job searches for each title
     4. Returns immediately with 202 Accepted
 
-    Each job search becomes its own independent Celery task with its own Run and WorkflowExecution records.
+    Each job search becomes its own independent Celery task with its own Run record.
 
     Args:
-        request: Request containing profile_id and optional search parameters
+        request: Request containing user_id and optional search parameters
 
     Returns:
         202 Accepted with profile information and job titles
@@ -290,35 +273,35 @@ async def run_job_search_from_profile(
         400: If profile has no suggested job titles or missing location
     """
     logger.info(
-        f"Received job search from profile request for profile_id: {request.profile_id}"
+        f"Received job search from profile request for user_id: {request.user_id}"
     )
 
-    # Load profile from database
+    # Load user from database
     session_gen = db_session()
     session = next(session_gen)
     try:
-        profile_repo = GenericRepository(session, UserProfile)
-        profile = profile_repo.get(str(request.profile_id))
+        user_repo = GenericRepository(session, User)
+        user = user_repo.get(str(request.user_id))
 
-        if not profile:
+        if not user:
             raise HTTPException(
                 status_code=HTTPStatus.NOT_FOUND,
-                detail=f"Profile with id {request.profile_id} not found",
+                detail=f"User with id {request.user_id} not found",
             )
 
         # Extract location and suggested job titles
-        location = profile.location
+        location = user.location
         if not location:
             raise HTTPException(
                 status_code=HTTPStatus.BAD_REQUEST,
-                detail="Profile is missing location. Please update the profile with a location.",
+                detail="User profile is missing location. Please update the profile with a location.",
             )
 
-        suggested_job_titles = profile.suggested_job_titles or []
+        suggested_job_titles = user.suggested_job_titles or []
         if not suggested_job_titles or len(suggested_job_titles) == 0:
             raise HTTPException(
                 status_code=HTTPStatus.BAD_REQUEST,
-                detail="Profile has no suggested job titles. Please run profiling workflow first.",
+                detail="User has no suggested job titles. Please run profiling workflow first.",
             )
 
         # Enqueue Celery tasks for each job title
@@ -329,13 +312,13 @@ async def run_job_search_from_profile(
                 context = JobSearchWorkflowContext(
                     query=job_title,
                     location=location,
-                    profile_id=request.profile_id,
+                    user_id=request.user_id,
                     num_results=request.num_results,
                     max_screening=request.max_screening,
                 )
 
-                # Create Run record (tie to profile owner for delivery email)
-                run = Run(status="pending", user_profile_id=request.profile_id)
+                # Create Run record (tie to user for delivery email)
+                run = Run(status="pending", user_id=request.user_id)
                 session.add(run)
                 session.commit()
                 session.refresh(run)
@@ -343,22 +326,15 @@ async def run_job_search_from_profile(
                 # Set run_id in context
                 context.run_id = run.id
 
-                # Create WorkflowExecution record (status: pending)
-                execution = WorkflowExecution(
-                    run_id=run.id,
-                    workflow_type="job_search",
-                    status="pending",
-                    context_snapshot=context.model_dump(mode="json"),
-                )
-                session.add(execution)
-                session.commit()
-                session.refresh(execution)
-
                 # Enqueue Celery task
                 task = execute_job_search_workflow.delay(
                     context_data=context.model_dump(mode="json"),
-                    execution_id=str(execution.id),
+                    run_id=str(run.id),
                 )
+
+                # Store task_id on run
+                run.task_id = task.id
+                session.commit()
                 task_ids.append(task.id)
 
                 logger.info(
@@ -372,13 +348,13 @@ async def run_job_search_from_profile(
                 # Continue with other job titles even if one fails
 
         logger.info(
-            f"Initiated {len(task_ids)} job searches for profile {request.profile_id} "
+            f"Initiated {len(task_ids)} job searches for user {request.user_id} "
             f"via Celery. Location: {location}. Task IDs: {task_ids}"
         )
 
         return JobSearchFromProfileResponse(
             message="Job searches initiated via Celery",
-            profile_id=request.profile_id,
+            user_id=request.user_id,
             location=location,
             job_titles_count=len(suggested_job_titles),
             job_titles=suggested_job_titles,

@@ -5,9 +5,10 @@ This module retrieves matched jobs, company research, and user profiles from the
 then uses a Pydantic AI agent to fabricate tailored cover letter topics and content.
 """
 
+import re
 import sys
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 
 # Add project root to Python path if running directly
 project_root = Path(__file__).parent.parent.parent
@@ -24,10 +25,9 @@ load_dotenv()
 from src.database.models import (
     MatchedJob,
     JobPosting,
-    UserProfile,
+    User,
     CompanyResearch,
     Run,
-    CoverLetter,
     Artifact,
 )
 from src.database.repository import GenericRepository
@@ -38,6 +38,27 @@ from src.fabrication.fab_cv import (
     render_cv_to_html,
     html_to_pdfbolt,
 )
+
+# Match literal \uXXXX (backslash + u + 4 hex digits) so we can decode to actual Unicode
+_UNICODE_ESCAPE_RE = re.compile(r"\\u([0-9a-fA-F]{4})")
+
+
+def _decode_unicode_escapes(s: str) -> str:
+    """Decode Python/JSON-style \\uXXXX sequences in a string to actual Unicode characters."""
+    if not s or "\\u" not in s:
+        return s
+    return _UNICODE_ESCAPE_RE.sub(lambda m: chr(int(m.group(1), 16)), s)
+
+
+def _normalize_cover_letter_strings(obj: Any) -> Any:
+    """Recursively decode \\uXXXX in all string values of a dict/list so DB stores proper Chinese etc."""
+    if isinstance(obj, str):
+        return _decode_unicode_escapes(obj)
+    if isinstance(obj, dict):
+        return {k: _normalize_cover_letter_strings(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_normalize_cover_letter_strings(v) for v in obj]
+    return obj
 
 
 class CoverLetterTopic(BaseModel):
@@ -228,40 +249,40 @@ def get_company_research(
     )
 
 
-def get_latest_user_profile(session: Session) -> Optional[UserProfile]:
-    """Retrieve the latest user profile from the database.
+def get_latest_user(session: Session) -> Optional[User]:
+    """Retrieve the latest user from the database (by last_used_at).
 
     Args:
         session: SQLAlchemy database session
 
     Returns:
-        UserProfile if found, None otherwise
+        User if found, None otherwise
     """
-    user_profile_repo = GenericRepository(session, UserProfile)
-    latest_profiles = user_profile_repo.get_latest(n=1)
-    return latest_profiles[0] if latest_profiles else None
+    user_repo = GenericRepository(session, User)
+    latest = user_repo.get_latest(n=1)
+    return latest[0] if latest else None
 
 
-def get_user_profile_for_run(session: Session, run_id: str) -> Optional[UserProfile]:
-    """Retrieve the user profile that owns the run (for correct name/email in CV and cover letter).
+def get_user_for_run(session: Session, run_id: str) -> Optional[User]:
+    """Retrieve the user that owns the run (for correct name/email in CV and cover letter).
 
-    Uses run.user_profile_id when set; otherwise falls back to latest user profile.
+    Uses run.user_id when set; otherwise falls back to latest user.
 
     Args:
         session: SQLAlchemy database session
         run_id: UUID of the run (as string)
 
     Returns:
-        UserProfile if found, None otherwise
+        User if found, None otherwise
     """
     import uuid as uuid_module
 
     run = session.query(Run).filter_by(id=uuid_module.UUID(run_id)).first()
-    if run and getattr(run, "user_profile_id", None):
-        profile = session.query(UserProfile).filter_by(id=run.user_profile_id).first()
-        if profile:
-            return profile
-    return get_latest_user_profile(session)
+    if run and getattr(run, "user_id", None):
+        user = session.query(User).filter_by(id=run.user_id).first()
+        if user:
+            return user
+    return get_latest_user(session)
 
 
 def save_artifact(
@@ -294,7 +315,7 @@ def save_artifact(
     if existing:
         # Update existing
         if cover_letter_data is not None:
-            existing.cover_letter = cover_letter_data
+            existing.cover_letter = _normalize_cover_letter_strings(cover_letter_data)
         if cv_pdf_url is not None:
             existing.cv = {"pdf_url": cv_pdf_url}
         existing.updated_at = datetime.utcnow()
@@ -302,10 +323,13 @@ def save_artifact(
         session.refresh(existing)
         return existing
     else:
-        # Create new
+        # Create new (decode \uXXXX so DB stores proper Chinese/Unicode, not escaped)
+        normalized_cover = (
+            _normalize_cover_letter_strings(cover_letter_data) if cover_letter_data else None
+        )
         new_artifact = Artifact(
             matched_job_id=uuid.UUID(matched_job_id),
-            cover_letter=cover_letter_data,
+            cover_letter=normalized_cover,
             cv={"pdf_url": cv_pdf_url} if cv_pdf_url else None,
         )
         session.add(new_artifact)
@@ -319,11 +343,9 @@ def save_cover_letter(
     matched_job_id: str,
     topic: CoverLetterTopic,
     content: CoverLetterContent,
-) -> CoverLetter:
+) -> Artifact:
     """
-    Save cover letter to database (backward compatibility wrapper).
-
-    Also saves to Artifact table for unified storage.
+    Save cover letter to database (Artifact table only).
 
     Args:
         session: SQLAlchemy database session
@@ -332,39 +354,10 @@ def save_cover_letter(
         content: CoverLetterContent object
 
     Returns:
-        CoverLetter: The saved cover letter record
+        Artifact: The saved artifact record (cover_letter JSON stored there)
     """
-    import uuid
-
     cover_letter_data = {"topic": topic.model_dump(), "content": content.model_dump()}
-
-    # Save to Artifact table
-    save_artifact(session, matched_job_id, cover_letter_data=cover_letter_data)
-
-    # Also save to CoverLetter table for backward compatibility
-    existing = (
-        session.query(CoverLetter)
-        .filter_by(matched_job_id=uuid.UUID(matched_job_id))
-        .first()
-    )
-
-    if existing:
-        existing.topic = topic.model_dump()
-        existing.content = content.model_dump()
-        existing.updated_at = datetime.utcnow()
-        session.commit()
-        session.refresh(existing)
-        return existing
-    else:
-        new_cover_letter = CoverLetter(
-            matched_job_id=uuid.UUID(matched_job_id),
-            topic=topic.model_dump(),
-            content=content.model_dump(),
-        )
-        session.add(new_cover_letter)
-        session.commit()
-        session.refresh(new_cover_letter)
-        return new_cover_letter
+    return save_artifact(session, matched_job_id, cover_letter_data=cover_letter_data)
 
 
 async def fabricate_application_materials_for_job(
@@ -426,20 +419,18 @@ async def fabricate_application_materials_for_job(
             print(f"   ✓ Found company research (ID: {company_research_obj.id})")
             company_research = company_research_obj.research_results
 
-        # Step 3: Retrieve user profile (use run owner so CV/cover letter get correct name and email)
+        # Step 3: Retrieve user (use run owner so CV/cover letter get correct name and email)
         print("\n3. Retrieving user profile...")
         if matched_job.run_id:
-            user_profile_obj = get_user_profile_for_run(
-                session, str(matched_job.run_id)
-            )
+            user_obj = get_user_for_run(session, str(matched_job.run_id))
         else:
-            user_profile_obj = get_latest_user_profile(session)
-        if not user_profile_obj:
-            raise ValueError("No user profile found in database")
+            user_obj = get_latest_user(session)
+        if not user_obj:
+            raise ValueError("No user found in database")
         print(
-            f"   ✓ Found user profile: {user_profile_obj.name} ({user_profile_obj.email})"
+            f"   ✓ Found user profile: {user_obj.name} ({user_obj.email})"
         )
-        user_profile = user_profile_obj.profile_text
+        user_profile = user_obj.profile_text
 
         # Step 4: Generate cover letter topic
         print("\n4. Generating cover letter topic...")
@@ -465,7 +456,7 @@ async def fabricate_application_materials_for_job(
 
         # Step 6: Generate CV (pass applicant contact from DB so CV uses real email, not placeholders)
         print("\n6. Generating tailored CV...")
-        refs = user_profile_obj.references
+        refs = user_obj.references
         applicant_phone = None
         applicant_linkedin = None
         if isinstance(refs, dict):
@@ -477,8 +468,8 @@ async def fabricate_application_materials_for_job(
             job_posting_company=job_posting.company_name or "",
             job_posting_description=job_posting.description or "",
             company_research=company_research,
-            applicant_name=user_profile_obj.name,
-            applicant_email=user_profile_obj.email,
+            applicant_name=user_obj.name,
+            applicant_email=user_obj.email,
             applicant_phone=applicant_phone,
             applicant_linkedin=applicant_linkedin,
         )
@@ -505,14 +496,6 @@ async def fabricate_application_materials_for_job(
             cv_pdf_url=pdf_url,
         )
         print(f"   ✓ Artifact saved (ID: {saved_artifact.id})")
-
-        # Also save cover letter to old table for backward compatibility
-        saved_cover_letter = save_cover_letter(
-            session=session,
-            matched_job_id=str(matched_job.id),
-            topic=topic,
-            content=content,
-        )
 
         # Update matched job status (only increment counter if status changed)
         was_completed = matched_job.fabrication_status == "completed"
