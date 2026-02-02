@@ -37,12 +37,7 @@ class User(Base):
 
     __tablename__ = "user"
 
-    id = Column(
-        UUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
-        doc="Unique identifier",
-    )
+    id = Column(String(255), primary_key=True, doc="Unique identifier")
     name = Column(String(255), nullable=False, default="", doc="Display name")
     email = Column(String(255), nullable=False, default="", doc="Email address")
     emailVerified = Column(
@@ -70,7 +65,9 @@ class User(Base):
     profile_text = Column(Text, nullable=True, doc="Structured profile text from PDFs")
     suggested_job_titles = Column(JSON, nullable=True, doc="AI-suggested job titles")
     source_pdfs = Column(JSON, nullable=True, doc="Source PDF paths")
-    references = Column(JSON, nullable=True, doc="References (LinkedIn, portfolio, etc.)")
+    references = Column(
+        JSON, nullable=True, doc="References (LinkedIn, portfolio, etc.)"
+    )
     last_used_at = Column(DateTime, nullable=True, doc="Last used in a job search")
 
 
@@ -99,7 +96,7 @@ class Run(Base):
         doc="Reference to the job search workflow",
     )
     user_id = Column(
-        UUID(as_uuid=True),
+        String(255),
         ForeignKey("user.id", ondelete="SET NULL"),
         nullable=True,
         doc="User owner for this run (used to send delivery email)",
@@ -243,7 +240,7 @@ class JobSearch(Base):
 
     # Owner (user-scoped; nullable for legacy or unauthenticated flows)
     user_id = Column(
-        UUID(as_uuid=True),
+        String(255),
         ForeignKey("user.id", ondelete="SET NULL"),
         nullable=True,
         doc="User who owns this job search",
@@ -501,7 +498,7 @@ class MatchedJob(Base):
         doc="Reference to the run that processes this matched job",
     )
     user_id = Column(
-        UUID(as_uuid=True),
+        String(255),
         ForeignKey("user.id", ondelete="SET NULL"),
         nullable=True,
         doc="User who owns this matched job (denormalized for scoping)",
@@ -760,7 +757,7 @@ class Session(Base):
 
     id = Column(String(255), primary_key=True, doc="Session ID (Better Auth)")
     userId = Column(
-        UUID(as_uuid=True),
+        String(255),
         ForeignKey("user.id", ondelete="CASCADE"),
         nullable=False,
         doc="User ID (Better Auth)",
@@ -784,7 +781,7 @@ class Account(Base):
 
     id = Column(String(255), primary_key=True, doc="Account ID (Better Auth)")
     userId = Column(
-        UUID(as_uuid=True),
+        String(255),
         ForeignKey("user.id", ondelete="CASCADE"),
         nullable=False,
         doc="User ID (Better Auth)",

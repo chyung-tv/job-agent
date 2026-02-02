@@ -1,0 +1,179 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model account {
+  id                    String    @id @db.VarChar(255)
+  userId                String    @db.VarChar(255)
+  accountId             String    @db.VarChar(255)
+  providerId            String    @db.VarChar(255)
+  accessToken           String?
+  refreshToken          String?
+  accessTokenExpiresAt  DateTime? @db.Timestamp(6)
+  refreshTokenExpiresAt DateTime? @db.Timestamp(6)
+  scope                 String?   @db.VarChar(255)
+  idToken               String?
+  password              String?   @db.VarChar(255)
+  createdAt             DateTime  @default(now()) @db.Timestamp(6)
+  updatedAt             DateTime  @default(now()) @db.Timestamp(6)
+  user                  user      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model alembic_version {
+  version_num String @id(map: "alembic_version_pkc") @db.VarChar(32)
+}
+
+model artifacts {
+  id             String       @id @db.Uuid
+  matched_job_id String       @unique(map: "uq_artifacts_matched_job_id") @db.Uuid
+  cover_letter   Json?        @db.Json
+  cv             Json?        @db.Json
+  created_at     DateTime     @default(now()) @db.Timestamp(6)
+  updated_at     DateTime     @default(now()) @db.Timestamp(6)
+  matched_jobs   matched_jobs @relation(fields: [matched_job_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model company_research {
+  id               String       @id @db.Uuid
+  company_name     String       @db.VarChar(255)
+  job_posting_id   String       @unique(map: "uq_company_research_job_posting_id") @db.Uuid
+  research_results String
+  citations        Json?        @db.Json
+  created_at       DateTime     @default(now()) @db.Timestamp(6)
+  updated_at       DateTime     @default(now()) @db.Timestamp(6)
+  job_postings     job_postings @relation(fields: [job_posting_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model job_postings {
+  id                  String            @id @db.Uuid
+  job_search_id       String            @db.Uuid
+  job_id              String?
+  title               String?           @db.VarChar(500)
+  company_name        String?           @db.VarChar(255)
+  location            String?           @db.VarChar(255)
+  via                 String?           @db.VarChar(255)
+  share_link          String?           @db.VarChar(1000)
+  description         String?
+  extensions          Json?             @db.Json
+  detected_extensions Json?             @db.Json
+  job_highlights      Json?             @db.Json
+  apply_options       Json?             @db.Json
+  created_at          DateTime          @default(now()) @db.Timestamp(6)
+  company_research    company_research?
+  job_searches        job_searches      @relation(fields: [job_search_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  matched_jobs        matched_jobs?
+}
+
+model job_searches {
+  id               String         @id @db.Uuid
+  query            String         @db.VarChar(255)
+  location         String         @db.VarChar(255)
+  google_domain    String?        @default("google.com") @db.VarChar(50)
+  hl               String?        @default("en") @db.VarChar(10)
+  gl               String?        @default("us") @db.VarChar(10)
+  total_jobs_found Int?           @default(0)
+  jobs_screened    Int?           @default(0)
+  matches_found    Int?           @default(0)
+  created_at       DateTime       @default(now()) @db.Timestamp(6)
+  updated_at       DateTime       @default(now()) @db.Timestamp(6)
+  user_id          String?        @db.VarChar(255)
+  job_postings     job_postings[]
+  user             user?          @relation(fields: [user_id], references: [id], onUpdate: NoAction)
+  matched_jobs     matched_jobs[]
+  runs             runs[]
+}
+
+model matched_jobs {
+  id                       String       @id @db.Uuid
+  job_search_id            String       @db.Uuid
+  job_posting_id           String       @unique(map: "uq_matched_jobs_job_posting_id") @db.Uuid
+  run_id                   String?      @db.Uuid
+  is_match                 Boolean      @default(false)
+  reason                   String
+  job_description_summary  String?
+  application_link         Json?        @db.Json
+  research_status          String       @default("pending") @db.VarChar(50)
+  research_attempts        Int          @default(0)
+  research_error           String?
+  research_completed_at    DateTime?    @db.Timestamp(6)
+  fabrication_status       String       @default("pending") @db.VarChar(50)
+  fabrication_attempts     Int          @default(0)
+  fabrication_error        String?
+  fabrication_completed_at DateTime?    @db.Timestamp(6)
+  created_at               DateTime     @default(now()) @db.Timestamp(6)
+  updated_at               DateTime     @default(now()) @db.Timestamp(6)
+  user_id                  String?      @db.VarChar(255)
+  artifacts                artifacts?
+  job_postings             job_postings @relation(fields: [job_posting_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  job_searches             job_searches @relation(fields: [job_search_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  runs                     runs?        @relation(fields: [run_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user                     user?        @relation(fields: [user_id], references: [id], onUpdate: NoAction)
+}
+
+model runs {
+  id                          String         @id @db.Uuid
+  job_search_id               String?        @db.Uuid
+  user_id                     String?        @db.VarChar(255)
+  task_id                     String?        @db.VarChar(255)
+  status                      String         @default("pending") @db.VarChar(255)
+  error_message               String?
+  total_matched_jobs          Int            @default(0)
+  research_completed_count    Int            @default(0)
+  fabrication_completed_count Int            @default(0)
+  research_failed_count       Int            @default(0)
+  fabrication_failed_count    Int            @default(0)
+  completed_at                DateTime?      @db.Timestamp(6)
+  delivery_triggered          Boolean        @default(false)
+  delivery_triggered_at       DateTime?      @db.Timestamp(6)
+  created_at                  DateTime       @default(now()) @db.Timestamp(6)
+  updated_at                  DateTime       @default(now()) @db.Timestamp(6)
+  matched_jobs                matched_jobs[]
+  job_searches                job_searches?  @relation(fields: [job_search_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user                        user?          @relation(fields: [user_id], references: [id], onUpdate: NoAction)
+}
+
+model session {
+  id        String   @id @db.VarChar(255)
+  userId    String   @db.VarChar(255)
+  token     String   @db.VarChar(255)
+  expiresAt DateTime @db.Timestamp(6)
+  ipAddress String?  @db.VarChar(255)
+  userAgent String?  @db.VarChar(500)
+  createdAt DateTime @default(now()) @db.Timestamp(6)
+  updatedAt DateTime @default(now()) @db.Timestamp(6)
+  user      user     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model user {
+  id                   String         @id @db.VarChar(255)
+  name                 String         @default("") @db.VarChar(255)
+  email                String         @default("") @db.VarChar(255)
+  emailVerified        Boolean        @default(false)
+  image                String?        @db.VarChar(500)
+  createdAt            DateTime       @default(now()) @db.Timestamp(6)
+  updatedAt            DateTime       @default(now()) @db.Timestamp(6)
+  location             String?        @db.VarChar(255)
+  profile_text         String?
+  suggested_job_titles Json?          @db.Json
+  source_pdfs          Json?          @db.Json
+  references           Json?          @db.Json
+  last_used_at         DateTime?      @db.Timestamp(6)
+  account              account[]
+  job_searches         job_searches[]
+  matched_jobs         matched_jobs[]
+  runs                 runs[]
+  session              session[]
+}
+
+model verification {
+  id         String   @id @db.VarChar(255)
+  identifier String   @db.VarChar(255)
+  value      String   @db.VarChar(255)
+  expiresAt  DateTime @db.Timestamp(6)
+  createdAt  DateTime @default(now()) @db.Timestamp(6)
+  updatedAt  DateTime @default(now()) @db.Timestamp(6)
+}
