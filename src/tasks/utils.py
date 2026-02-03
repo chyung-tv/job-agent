@@ -6,6 +6,7 @@ from uuid import UUID
 
 from src.database import db_session
 from src.database.models import Run
+from src.workflow.status_publisher import publish_run_status
 
 logger = logging.getLogger(__name__)
 
@@ -25,11 +26,7 @@ def update_run_status(
     session_gen = db_session()
     session = next(session_gen)
     try:
-        run = (
-            session.query(Run)
-            .filter(Run.id == UUID(run_id))
-            .first()
-        )
+        run = session.query(Run).filter(Run.id == UUID(run_id)).first()
 
         if run:
             run.status = status
@@ -40,6 +37,20 @@ def update_run_status(
             run.updated_at = datetime.utcnow()
             session.commit()
             logger.info(f"Updated run {run_id} status to {status}")
+
+            completed_at_iso = None
+            if status in ("completed", "failed"):
+                completed_at_iso = (
+                    run.completed_at.isoformat() + "Z"
+                    if run.completed_at
+                    else datetime.utcnow().isoformat() + "Z"
+                )
+            publish_run_status(
+                run_id,
+                status,
+                error_message=error_message,
+                completed_at=completed_at_iso,
+            )
         else:
             logger.warning(f"Run {run_id} not found")
     except Exception as e:

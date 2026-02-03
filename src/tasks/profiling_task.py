@@ -30,6 +30,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 _langfuse_config = LangfuseConfig.from_env()
 
+
 def _is_retryable(exc: BaseException) -> bool:
     """Return False for client errors and event-loop issues so we don't retry."""
     if isinstance(exc, ModelHTTPError):
@@ -56,6 +57,10 @@ def run_async(coro):
     causing "Event loop is closed" on retry. Using a new thread per call
     avoids that. When already inside a running loop (e.g. tests, Jupyter),
     uses nest_asyncio and run_until_complete.
+
+    Handles "Event loop is closed" errors that occur during httpx/httpcore
+    cleanup by wrapping them in a more informative exception that preserves
+    the original error context.
     """
     try:
         loop = asyncio.get_running_loop()
@@ -68,6 +73,46 @@ def run_async(coro):
         def _run():
             try:
                 result_holder.append(asyncio.run(coro))
+            except RuntimeError as e:
+                # Check if this is "Event loop is closed" during cleanup
+                if "Event loop is closed" in str(e):
+                    # This happens when httpx/httpcore tries to clean up
+                    # connections after asyncio.run() has already closed the loop.
+                    # Wrap it to provide context and mark as non-retryable.
+                    import traceback
+
+                    tb_str = "".join(
+                        traceback.format_exception(type(e), e, e.__traceback__)
+                    )
+                    # Check if it's coming from cleanup code
+                    is_cleanup_error = any(
+                        marker in tb_str
+                        for marker in [
+                            "httpcore/_async/connection",
+                            "httpx/_client.py",
+                            "anyio/_backends",
+                            "_close_connections",
+                            "aclose()",
+                            "transport_stream.aclose()",
+                        ]
+                    )
+                    if is_cleanup_error:
+                        # Wrap in a more informative exception
+                        wrapped = RuntimeError(
+                            "Event loop closed during httpx/httpcore connection cleanup. "
+                            "This typically occurs when an async HTTP client tries to "
+                            "close connections after the event loop has already been closed. "
+                            "The underlying workflow may have failed or succeeded, but "
+                            "cleanup failed. Check logs for the actual workflow result."
+                        )
+                        wrapped.__cause__ = e
+                        wrapped.__suppress_context__ = True
+                        exc_holder.append(wrapped)
+                    else:
+                        # Not clearly a cleanup error - preserve as-is
+                        exc_holder.append(e)
+                else:
+                    exc_holder.append(e)
             except BaseException as e:
                 exc_holder.append(e)
 
@@ -152,7 +197,9 @@ def execute_profiling_workflow(
                         langfuse.update_current_trace(
                             output={
                                 "status": final_status,
-                                "user_id": str(user_id_result) if user_id_result != "N/A" else None,
+                                "user_id": str(user_id_result)
+                                if user_id_result != "N/A"
+                                else None,
                                 "has_errors": result.has_errors(),
                             }
                         )

@@ -12,11 +12,30 @@ from src.langfuse_utils import (
     observe,
     propagate_attributes,
 )
+from src.workflow.status_publisher import publish_run_status
 
 if TYPE_CHECKING:
     from src.workflow.base_context import BaseContext
 
 logger = logging.getLogger(__name__)
+
+# Short messages for Progress Stepper (optional; frontend can map node names)
+_NODE_MESSAGES: Dict[str, str] = {
+    "UserInputNode": "Validating input...",
+    "CVProcessingNode": "Parsing CV...",
+    "ProfileRetrievalNode": "Loading profile...",
+    "DiscoveryNode": "Discovering jobs...",
+    "MatchingNode": "Matching jobs...",
+    "ResearchNode": "Researching companies...",
+    "FabricationNode": "Generating materials...",
+    "CompletionNode": "Checking completion...",
+    "DeliveryNode": "Sending delivery...",
+}
+
+
+def _node_message(node_name: str) -> str:
+    """Return a short human-readable message for the node, or empty string."""
+    return _NODE_MESSAGES.get(node_name, "")
 
 
 class ExecutionRecord:
@@ -74,7 +93,7 @@ class BaseWorkflow(ABC):
         session = next(session_gen)
         try:
             user_id = getattr(context, "user_id", None)
-            run = Run(status="processing", user_id=user_id)
+            run = Run(status="processing", user_id=str(user_id) if user_id else None)
             session.add(run)
             session.commit()
             session.refresh(run)
@@ -109,6 +128,14 @@ class BaseWorkflow(ABC):
         """
         node_name = node.__class__.__name__
         self.logger.info(f"Executing node: {node_name}")
+
+        if context.run_id:
+            publish_run_status(
+                str(context.run_id),
+                "processing",
+                node=node_name,
+                message=_node_message(node_name),
+            )
 
         try:
             # Execute node

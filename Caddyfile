@@ -1,14 +1,20 @@
 # API: set API_DOMAIN in .env (e.g. api.yourapp.com or localhost for local)
+# read_timeout 600s keeps long-lived SSE connections (e.g. /workflow/status/{run_id}/stream) open
 {$API_DOMAIN} {
-	reverse_proxy api:8000
+	reverse_proxy api:8000 {
+		transport http {
+			read_timeout 600s
+		}
+	}
 }
 
 # Optional: to expose Flower, add the block below and set FLOWER_DOMAIN (and Basic Auth vars) in .env.
 # Generate hash: caddy hash-password  or  htpasswd -nbB user password
 # In .env escape bcrypt hash: use $$ for each $ (e.g. $$2y$$05$$...)
-{$FLOWER_DOMAIN} {
-	basic_auth * {
-		{$FLOWER_BASIC_AUTH_USER} {$FLOWER_BASIC_AUTH_HASH}
-	}
-	reverse_proxy flower:5555
-}
+
+# {$FLOWER_DOMAIN} {
+# 	basic_auth * {
+# 		{$FLOWER_BASIC_AUTH_USER} {$FLOWER_BASIC_AUTH_HASH}
+# 	}
+# 	reverse_proxy flower:5555
+# }

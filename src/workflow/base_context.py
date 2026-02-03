@@ -1,9 +1,9 @@
 """Base context classes for workflow state management."""
 
-from typing import Optional, List
+from typing import Optional, List, Union
 from datetime import datetime
 from uuid import UUID
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 from src.discovery.serpapi_models import JobResult
 from src.matcher.matcher import JobScreeningOutput
@@ -58,7 +58,8 @@ class JobSearchWorkflowContext(BaseContext):
     location: str
     num_results: int = DEFAULT_NUM_RESULTS
     max_screening: int = TESTING_MAX_SCREENING
-    user_id: Optional[UUID] = None
+    # Better Auth user id is string (not necessarily UUID); API may send UUID.
+    user_id: Optional[Union[UUID, str]] = None
     google_domain: str = "google.com"
     hl: str = "en"
     gl: str = "us"
@@ -90,6 +91,13 @@ class JobSearchWorkflowContext(BaseContext):
             "profile_cached": self.profile_was_cached,
             "has_errors": self.has_errors(),
         }
+
+    @field_serializer("user_id")
+    def _serialize_user_id(self, value: Optional[Union[UUID, str]]) -> Optional[str]:
+        """Serialize user_id to string for JSON (DB and Better Auth use string ids)."""
+        if value is None:
+            return None
+        return str(value)
 
     def validate(self) -> bool:
         """Validate that context has required fields.

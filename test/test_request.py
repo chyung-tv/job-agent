@@ -11,6 +11,7 @@ import requests
 import json
 import sys
 import argparse
+import time
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -136,11 +137,11 @@ def run_profiling_workflow(
             print("   # Or: docker logs -f job-agent-celery-worker")
             print("\n2. Check Database Status:")
             print("   Query the 'runs' table:")
+            print(f"   SELECT * FROM runs WHERE id = '{result.get('run_id')}';")
+            print("\n3. Stream live status (SSE):")
             print(
-                f"   SELECT * FROM runs WHERE id = '{result.get('run_id')}';"
+                f'   curl -N -H "X-API-Key: $JOB_LAND_API_KEY" "{API_BASE_URL}/workflow/status/{result.get("run_id")}/stream"'
             )
-            print("\n3. Check Task Status via API (if status endpoint exists):")
-            print(f"   GET {API_BASE_URL}{result.get('status_url')}")
             print("\n4. Check Redis Queue:")
             print("   docker exec -it job-agent-redis redis-cli")
             print("   LLEN celery")
@@ -236,11 +237,11 @@ def run_job_search_workflow(
             print("   # Or: docker logs -f job-agent-celery-worker")
             print("\n2. Check Database Status:")
             print("   Query the 'runs' table:")
+            print(f"   SELECT * FROM runs WHERE id = '{result.get('run_id')}';")
+            print("\n3. Stream live status (SSE):")
             print(
-                f"   SELECT * FROM runs WHERE id = '{result.get('run_id')}';"
+                f'   curl -N -H "X-API-Key: $JOB_LAND_API_KEY" "{API_BASE_URL}/workflow/status/{result.get("run_id")}/stream"'
             )
-            print("\n3. Check Task Status via API (if status endpoint exists):")
-            print(f"   GET {API_BASE_URL}{result.get('status_url')}")
             print("\n4. Check Redis Queue:")
             print("   docker exec -it job-agent-redis redis-cli")
             print("   LLEN celery")
@@ -376,12 +377,8 @@ def run_job_search_from_profile(
             print("   docker compose logs -f celery-worker")
             print("   # Or: docker logs -f job-agent-celery-worker")
             print("\n2. Check Database Status:")
-            print(
-                "   Query the 'runs' table for job_search workflows:"
-            )
-            print(
-                "   SELECT * FROM runs ORDER BY created_at DESC;"
-            )
+            print("   Query the 'runs' table for job_search workflows:")
+            print("   SELECT * FROM runs ORDER BY created_at DESC;")
             print("\n3. Check Redis Queue:")
             print("   docker exec -it job-agent-redis redis-cli")
             print("   LLEN celery")
@@ -485,11 +482,15 @@ def check_workflow_status(run_id: str) -> Optional[Dict[str, Any]]:
 
             return result
         elif response.status_code == 404:
-            print(f"\n⚠ Status endpoint not found or run_id not found: {run_id}")
-            print("\nYou can check status via:")
             print(
-                "1. Database: SELECT * FROM runs WHERE id = '...';"
+                f"\n⚠ One-off GET status endpoint not implemented for run_id: {run_id}"
             )
+            print("\nFor real-time status, use the SSE stream (same API key):")
+            print(
+                f'  curl -N -H "X-API-Key: $JOB_LAND_API_KEY" "{API_BASE_URL}/workflow/status/{run_id}/stream"'
+            )
+            print("\nOr check status via:")
+            print("1. Database: SELECT * FROM runs WHERE id = '...';")
             print("2. Celery logs: docker compose logs -f celery-worker")
             return None
         else:
@@ -504,6 +505,108 @@ def check_workflow_status(run_id: str) -> Optional[Dict[str, Any]]:
         print("1. Database: SELECT * FROM runs WHERE id = '...';")
         print("2. Celery logs: docker compose logs -f celery-worker")
         return None
+
+
+def test_sse_stream(run_id: str, timeout: int = 60) -> bool:
+    """Test SSE streaming endpoint for a workflow run.
+
+    Args:
+        run_id: UUID of the run to stream status for
+        timeout: Maximum seconds to wait for events (default: 60)
+
+    Returns:
+        True if SSE stream is working, False otherwise
+    """
+    print("\n" + "=" * 80)
+    print(f"Testing SSE Stream for Run ID: {run_id}")
+    print("=" * 80)
+
+    stream_url = f"{API_BASE_URL}/workflow/status/{run_id}/stream"
+    print(f"\nConnecting to SSE endpoint: {stream_url}")
+    print(f"Will listen for up to {timeout} seconds...")
+    print(
+        "\nWaiting for events (you should see 'data:' lines when workflow publishes status):"
+    )
+    print("-" * 80)
+
+    try:
+        response = requests.get(
+            stream_url,
+            headers=_headers(),
+            stream=True,
+            timeout=timeout + 5,
+        )
+
+        if response.status_code == 401:
+            print("\n✗ API key missing or invalid. Set API_KEY in .env")
+            return False
+
+        if response.status_code != 200:
+            print(f"\n✗ Unexpected status code: {response.status_code}")
+            print(f"Response: {response.text[:200]}")
+            return False
+
+        print(f"✓ Connected! Status: {response.status_code}")
+        print(f"Content-Type: {response.headers.get('Content-Type', 'N/A')}")
+        print("\nListening for SSE events...\n")
+
+        event_count = 0
+        start_time = time.time()
+
+        for line in response.iter_lines(decode_unicode=True):
+            if time.time() - start_time > timeout:
+                print(f"\n⚠ Timeout reached ({timeout}s). Stopping.")
+                break
+
+            if line:
+                if line.startswith("data: "):
+                    event_count += 1
+                    data_str = line[6:]  # Remove "data: " prefix
+                    try:
+                        data = json.loads(data_str)
+                        print(f"[Event {event_count}] {json.dumps(data, indent=2)}")
+                    except json.JSONDecodeError:
+                        print(f"[Event {event_count}] {data_str}")
+                elif line.startswith(": "):
+                    # Heartbeat comment
+                    print(f"[Heartbeat] {line}")
+                else:
+                    print(f"[Raw] {line}")
+
+        print("\n" + "-" * 80)
+        if event_count > 0:
+            print(f"✓ SSE stream working! Received {event_count} event(s)")
+            return True
+        else:
+            print("⚠ No events received. This could mean:")
+            print("  - Workflow hasn't started publishing yet")
+            print("  - Workflow already completed before you connected")
+            print("  - Redis pub/sub not working")
+            print("\nTo debug:")
+            print(
+                "  1. Check if workflow is running: docker compose logs -f celery-worker"
+            )
+            print(
+                "  2. Check Redis: docker exec -it job-agent-redis redis-cli PUBSUB CHANNELS"
+            )
+            test_payload = '{"status":"test"}'
+            print(
+                f"  3. Manually publish test: redis-cli PUBLISH run:status:{run_id} '{test_payload}'"
+            )
+            return False
+
+    except requests.exceptions.Timeout:
+        print(f"\n✗ Connection timeout after {timeout} seconds")
+        return False
+    except requests.exceptions.ConnectionError:
+        print("\n✗ Connection failed - Is the API server running?")
+        return False
+    except Exception as e:
+        print(f"\n✗ Error: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return False
 
 
 def get_job_search_from_profile_input() -> Optional[Dict[str, Any]]:
@@ -552,6 +655,7 @@ def display_menu():
     )
     print("  5. Full Flow - Run profiling then job search")
     print("  6. Check Workflow Status - Check status of a workflow run")
+    print("  7. Test SSE Stream - Test Server-Sent Events streaming for a run")
     print()
     print("  0. Exit")
     print()
@@ -580,7 +684,7 @@ def interactive_main():
 
     while True:
         display_menu()
-        choice = input("Enter your choice (0-6): ").strip()
+        choice = input("Enter your choice (0-7): ").strip()
 
         if choice == "0":
             print("\nExiting...")
@@ -661,8 +765,18 @@ def interactive_main():
                 check_workflow_status(run_id)
             else:
                 print("⚠ Run ID is required")
+        elif choice == "7":
+            run_id = input("\nEnter Run ID (UUID) to test SSE stream: ").strip()
+            if run_id:
+                timeout_input = input(
+                    "Enter timeout in seconds (default: 60): "
+                ).strip()
+                timeout = int(timeout_input) if timeout_input else 60
+                test_sse_stream(run_id, timeout)
+            else:
+                print("⚠ Run ID is required")
         else:
-            print("\n❌ Invalid choice. Please enter a number between 0-6.")
+            print("\n❌ Invalid choice. Please enter a number between 0-7.")
             continue
 
         # Ask if user wants to continue
@@ -681,7 +795,9 @@ def interactive_main():
 
 def test_health_check():
     """Pytest entry: call health check against local API (requires API running)."""
-    assert run_health_check(), "Health check failed; ensure API is running (e.g. ./start.sh)"
+    assert run_health_check(), (
+        "Health check failed; ensure API is running (e.g. ./start.sh)"
+    )
 
 
 def main():

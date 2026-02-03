@@ -1,8 +1,8 @@
 """Context classes for profiling workflow."""
 
-from typing import Optional, List
+from typing import Optional, List, Union
 from uuid import UUID
-from pydantic import Field
+from pydantic import Field, field_serializer
 
 from src.workflow.base_context import BaseContext
 
@@ -30,12 +30,20 @@ class ProfilingWorkflowContext(BaseContext):
 
     # ========== Final Output ==========
     user_profile: Optional[str] = None
-    user_id: Optional[UUID] = None
+    # Set by CVProcessingNode from User.id; Better Auth uses string ids (not necessarily UUID).
+    user_id: Optional[Union[UUID, str]] = None
     references: Optional[dict] = None
     suggested_job_titles: Optional[List[str]] = Field(
         default=None,
         description="List of AI-suggested job titles for this profile",
     )
+
+    @field_serializer("user_id")
+    def _serialize_user_id(self, value: Optional[Union[UUID, str]]) -> Optional[str]:
+        """Serialize user_id to string for JSON (DB and Better Auth use string ids)."""
+        if value is None:
+            return None
+        return str(value)
 
     def validate(self) -> bool:
         """Validate that context has required fields.

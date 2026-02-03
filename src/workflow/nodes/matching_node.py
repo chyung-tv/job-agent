@@ -162,7 +162,9 @@ IMPORTANT:
             return output
         except Exception as e:
             job_id_display = (
-                (job.job_id[:50] + "...") if job.job_id and len(job.job_id) > 50 else (job.job_id or "N/A")
+                (job.job_id[:50] + "...")
+                if job.job_id and len(job.job_id) > 50
+                else (job.job_id or "N/A")
             )
             self.logger.warning(f"Failed to match job {job_id_display}: {e}")
             return None
@@ -213,7 +215,9 @@ IMPORTANT:
 
         # Resolve user_id for scoping (from job_search or run/context)
         job_search = job_search_repo.get(str(context.job_search_id))
-        user_id = job_search.user_id if job_search else getattr(context, "user_id", None)
+        user_id = (
+            job_search.user_id if job_search else getattr(context, "user_id", None)
+        )
 
         # Build mapping: job_id (str) -> JobPosting.id (UUID)
         postings = job_posting_repo.filter_by(job_search_id=context.job_search_id)
@@ -280,7 +284,7 @@ IMPORTANT:
                     job_description_summary=screening_output.job_description,
                     application_link=screening_output.application_link,
                     run_id=context.run_id,
-                    user_id=user_id,
+                    user_id=str(user_id) if user_id else None,
                 )
                 matched_job_repo.create(matched_job)
                 saved_count += 1

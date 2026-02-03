@@ -163,7 +163,7 @@ class DiscoveryNode(BaseNode):
                 hl=context.hl,
                 gl=context.gl,
                 total_jobs_found=len(context.jobs),
-                user_id=user_id,
+                user_id=str(user_id) if user_id else None,
             )
             job_search = job_search_repo.create(job_search)
             context.job_search_id = job_search.id

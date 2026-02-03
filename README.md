@@ -14,28 +14,33 @@ Automated job search and application workflow: build a profile from your CV, dis
 
 | Layer        | Technology                          |
 |-------------|-------------------------------------|
-| API         | FastAPI, uvicorn                    |
-| Tasks       | Celery, Redis (broker & result)     |
-| Database    | PostgreSQL (SQLAlchemy 2, psycopg3)|
-| Job search  | SerpAPI, Gemini (matching/research), Exa (research) |
-| Delivery    | Nylas (email)                       |
-| CV parsing  | Docling, PyMuPDF, RapidOCR          |
-| Observability | Langfuse, Flower, Sentry (optional) |
-| Runtime     | Docker, Docker Compose, Caddy (HTTPS) |
+| **Frontend** | Next.js (App Router), TypeScript, Better Auth (Google OAuth), Prisma |
+| **API**      | FastAPI, uvicorn                    |
+| **Tasks**    | Celery, Redis (broker & result)     |
+| **Database** | PostgreSQL (SQLAlchemy 2 + Alembic for migrations, Prisma for frontend reads) |
+| **Job search** | SerpAPI, Gemini (matching/research), Exa (research) |
+| **Delivery** | Nylas (email)                       |
+| **CV parsing** | Docling, PyMuPDF, RapidOCR          |
+| **Observability** | Langfuse, Flower, Sentry (optional) |
+| **Runtime**  | Docker, Docker Compose, Caddy (HTTPS) |
 
 ## Architecture
 
-- **API** (`src/api/api.py`) — REST endpoints; all protected routes require `X-API-Key` or `Authorization: Bearer <key>`.
+- **Frontend** (`frontend/`) — Next.js application with Better Auth (Google OAuth) and Prisma for data access. Uses limited-privilege Postgres user for security.
+- **API** (`src/api/api.py`) — REST endpoints for workflow triggers; all protected routes require `X-API-Key` or `Authorization: Bearer <key>`. No read endpoints; frontend uses Prisma directly.
 - **Workflows** — Node-based pipelines in `src/workflow/`:
   - **Profiling**: UserInputNode → CVProcessingNode (parse PDFs, AI profile, save to DB).
   - **Job search**: ProfileRetrievalNode → DiscoveryNode → MatchingNode → ResearchNode → FabricationNode → CompletionNode → DeliveryNode.
-- **Celery** — `execute_profiling_workflow` and `execute_job_search_workflow` run in worker containers; state is stored in PostgreSQL (`Run`, `WorkflowExecution`, `UserProfile`).
+- **Celery** — `execute_profiling_workflow` and `execute_job_search_workflow` run in worker containers; state is stored in PostgreSQL (`Run`, `user` table with auth + profile columns).
+- **Database** — SQLAlchemy (backend) is the schema master; Alembic handles migrations. Prisma (frontend) introspects and generates a client; never runs migrations.
 
 ## Prerequisites
 
 - Docker and Docker Compose
-- Python 3.13+ (for local dev; see `pyproject.toml`)
+- Python 3.13+ (for backend; see `pyproject.toml`)
+- Node.js 18+ (for frontend; see `frontend/package.json`)
 - `.env` (copy from `.env.example` and set API keys, DB, Redis, etc.)
+- `frontend/.env` (copy from `frontend/.env.example` and set `DATABASE_URL`, `BETTER_AUTH_*`, Google OAuth, etc.)
 
 ## Quick Start
 
@@ -88,47 +93,97 @@ Set `API_KEY` in `.env` (and optionally override the default in `src/config.py` 
 
 ## Environment Variables
 
+### Backend (`.env`)
 See `.env.example` for the full list. Main groups:
 
-- **Database** — `POSTGRES_*`, `DATABASE_URL`
+- **Database** — `POSTGRES_*`, `DATABASE_URL` (uses admin user for migrations)
 - **Redis / Celery** — `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`
 - **External APIs** — `GEMINI_API_KEY`, `SERPAPI_KEY`, `EXA_API_KEY`, `NYLAS_*`, `PDFBOLTS_API_KEY`
 - **Observability** — `LANGFUSE_*`, `SENTRY_DSN`
 - **API / Flower** — `API_KEY`, `API_PORT`, `FLOWER_PORT`, `FLOWER_BASIC_AUTH_*`
 - **Deployment** — `API_DOMAIN`, `FLOWER_DOMAIN` (for Caddy)
 
+### Frontend (`frontend/.env`)
+See `frontend/.env.example`. Main variables:
+
+- **Database** — `DATABASE_URL` (uses limited-privilege user: `job_agent_ui`)
+- **Authentication** — `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, Google OAuth (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`)
+- **API Integration** — `NEXT_PUBLIC_API_URL`, `API_KEY` (server-side only)
+
+**Important:** Frontend uses a limited-privilege Postgres user (`job_agent_ui`) that can only `SELECT`, `INSERT`, `UPDATE`—never `CREATE`, `ALTER`, or `DROP`. This prevents accidental Prisma migrations from affecting production.
+
 ## Project Layout
 
 ```
-src/
-  api/           # FastAPI app and routes
-  celery_app.py  # Celery app and task registration
-  config.py      # Constants and API key
-  database/      # Models, session, repository, create_tables
-  delivery/      # Nylas email, templates
-  discovery/     # SerpAPI job search
-  fabrication/  # CV and cover letter generation
-  matcher/       # Job screening (AI)
-  profiling/     # PDF parsing, profile building
-  research/      # Company research (AI, Exa)
-  tasks/         # Celery tasks (profiling, job search)
-  workflow/      # Base workflow + job_search & profiling workflows + nodes
-docs/            # Deployment, Celery, Langfuse, etc.
-test/            # Request and workflow tests
+job-agent/
+  frontend/              # Next.js frontend application
+    app/                 # App Router pages and routes
+      api/auth/[...all]/ # Better Auth catch-all route
+    lib/                 # Auth config, Prisma client, utilities
+    prisma/              # Prisma schema (introspected only, never migrated)
+    components/          # React components (UI)
+  src/                   # Backend Python code
+    api/                 # FastAPI app and routes
+    celery_app.py        # Celery app and task registration
+    config.py            # Constants and API key
+    database/            # Models, session, repository, Alembic migrations
+    delivery/            # Nylas email, templates
+    discovery/           # SerpAPI job search
+    fabrication/         # CV and cover letter generation
+    matcher/             # Job screening (AI)
+    profiling/           # PDF parsing, profile building
+    research/            # Company research (AI, Exa)
+    tasks/               # Celery tasks (profiling, job search)
+    workflow/            # Base workflow + job_search & profiling workflows + nodes
+  alembic/               # Database migrations (Alembic)
+  docs/                  # Documentation (see Documentation section below)
+  test/                  # Request and workflow tests
+  docker-compose.yml     # Development Docker Compose config
+  docker-compose.prod.yml # Production overrides
+  Caddyfile              # Caddy reverse proxy config
+  setup.sh               # Setup script (migrations, start/stop)
 ```
 
 ## Documentation
 
-- [Pre-deployment setup](docs/pre-deployment-setup-guide.md) — Local setup, domain, Hetzner, Caddy, env, tables, Flower
-- [Deployment](docs/deployment.md) — Production deployment notes
-- [Celery](docs/celery.md) / [implementation plan](docs/celery-implementation-plan.md)
-- [Langfuse](docs/langfuse.md) / [integration guide](docs/langfuse-integration-guide.md)
+Comprehensive documentation is available in the [`docs/`](docs/) directory:
+
+### Setup & Deployment
+- **[Pre-deployment setup guide](docs/pre-deployment-setup-guide.md)** — Local setup, domain configuration, Hetzner VPS, Caddy, environment variables, database tables, Flower
+- **[Deployment guide](docs/deployment.md)** — Production deployment walkthrough (Hetzner, DNS, Caddy, HTTPS)
+- **[Continuous development](docs/continuous-development.md)** — Redeploy checklist and workflow
+
+### Frontend & Integration
+- **[Next.js setup plan](docs/next-js-setup.md)** — Architecture decisions, Better Auth, Prisma, SQLAlchemy as schema master
+- **[Next.js implementation plan](docs/next-implementation.md)** — Phased implementation: backend (Alembic, model consolidation) then frontend (Next.js, Better Auth, Prisma)
+- **[API calls guide](docs/api-calls-guide.md)** — How to call the FastAPI endpoints from command line or HTTP clients
+
+### Backend & Infrastructure
+- **[Celery documentation](docs/celery.md)** — Celery setup and configuration
+- **[Celery implementation plan](docs/celery-implementation-plan.md)** — Implementation details for async task execution
+- **[Langfuse documentation](docs/langfuse.md)** — Observability and LLM tracing
+- **[Langfuse integration guide](docs/langfuse-integration-guide.md)** — How to integrate Langfuse for workflow observability
+
+### Additional Resources
+- **[Workflow logs](docs/finished/WORKFLOW_LOGS.md)** — Understanding workflow execution logs and common messages
+
+**Note:** Some completed documentation is archived in [`docs/finished/`](docs/finished/).
 
 ## Development
 
+### Backend
 - **Run tests**: from project root, run your test runner against `test/` (e.g. `pytest test/` if configured).
 - **Local stack**: `./start.sh` then `./setup.sh`; API on port 8000, Flower on 5555 (see `docker-compose.yml`).
 - **Production-like**: `./start.sh --prod` and `./setup.sh --prod` (uses `docker-compose.prod.yml` and Caddy).
+
+### Frontend
+- **Local development**: `cd frontend && npm run dev` (runs on port 3000).
+- **Prisma sync**: After backend schema changes, run `npx prisma db pull` then `npx prisma generate` in `frontend/`. **Never** run `prisma migrate` or `prisma db push`.
+- **Docker**: Frontend runs in Docker Compose alongside backend services.
+
+### Database Migrations
+- **Backend**: All schema changes via Alembic (`alembic revision --autogenerate`, then `alembic upgrade head`).
+- **Frontend**: Prisma only introspects (`prisma db pull`) and generates client (`prisma generate`). See [Next.js setup plan](docs/next-js-setup.md) for details.
 
 ## License
 

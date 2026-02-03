@@ -37,7 +37,12 @@ class User(Base):
 
     __tablename__ = "user"
 
-    id = Column(String(255), primary_key=True, doc="Unique identifier")
+    # Better Auth uses string identifiers for user id (not necessarily UUID; may be nanoid or other).
+    id = Column(
+        String(255),
+        primary_key=True,
+        doc="Unique identifier (Better Auth; string, not UUID)",
+    )
     name = Column(String(255), nullable=False, default="", doc="Display name")
     email = Column(String(255), nullable=False, default="", doc="Email address")
     emailVerified = Column(
@@ -95,6 +100,7 @@ class Run(Base):
         nullable=True,  # Nullable initially for migration
         doc="Reference to the job search workflow",
     )
+    # String to match User.id (Better Auth); not necessarily a UUID.
     user_id = Column(
         String(255),
         ForeignKey("user.id", ondelete="SET NULL"),
@@ -238,7 +244,7 @@ class JobSearch(Base):
         doc="Country code (e.g., 'us')",
     )
 
-    # Owner (user-scoped; nullable for legacy or unauthenticated flows)
+    # String to match User.id (Better Auth); not necessarily a UUID.
     user_id = Column(
         String(255),
         ForeignKey("user.id", ondelete="SET NULL"),
@@ -309,7 +315,7 @@ class JobSearch(Base):
             hl=context.hl,
             gl=context.gl,
             total_jobs_found=total_jobs_found,
-            user_id=user_id,
+            user_id=str(user_id) if user_id else None,
         )
 
 
@@ -497,6 +503,7 @@ class MatchedJob(Base):
         nullable=True,  # Nullable initially for migration
         doc="Reference to the run that processes this matched job",
     )
+    # String to match User.id (Better Auth); not necessarily a UUID.
     user_id = Column(
         String(255),
         ForeignKey("user.id", ondelete="SET NULL"),

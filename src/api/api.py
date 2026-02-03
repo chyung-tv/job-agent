@@ -1,5 +1,6 @@
 """FastAPI endpoints for job search workflow."""
 
+import asyncio
 import sys
 from pathlib import Path
 
@@ -11,14 +12,16 @@ if str(project_root) not in sys.path:
 
 from http import HTTPStatus
 import logging
-from typing import Optional
+from typing import AsyncGenerator, Optional
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from redis.asyncio import Redis
 
 from src.config import get_api_key
+from src.workflow.status_publisher import get_redis_url
 from src.workflow.job_search_workflow import JobSearchWorkflow
 from src.workflow.profiling_workflow import ProfilingWorkflow
 from src.workflow.base_context import JobSearchWorkflowContext
@@ -127,7 +130,7 @@ async def run_job_search_workflow(
     try:
         # Create Run record (tie to user when user_id provided for delivery email)
         user_id = getattr(context, "user_id", None)
-        run = Run(status="pending", user_id=user_id)
+        run = Run(status="pending", user_id=str(user_id) if user_id else None)
         session.add(run)
         session.commit()
         session.refresh(run)
@@ -181,6 +184,58 @@ async def read_root(_: None = Depends(verify_api_key)):
 async def health_check():
     """Health check endpoint."""
     return {"status": "healthy"}
+
+
+SSE_HEARTBEAT_INTERVAL_SEC = 15
+
+
+async def _sse_run_status_stream(run_id: UUID) -> AsyncGenerator[str, None]:
+    """Subscribe to Redis run:status:{run_id} and yield SSE events. Heartbeat every 15s."""
+    channel = f"run:status:{run_id}"
+    url = get_redis_url()
+    client = Redis.from_url(url)
+    pubsub = client.pubsub()
+    try:
+        await pubsub.subscribe(channel)
+        while True:
+            message = await pubsub.get_message(
+                ignore_subscribe_messages=True,
+                timeout=SSE_HEARTBEAT_INTERVAL_SEC,
+            )
+            if message is None:
+                yield ": keep-alive\n\n"
+            elif message.get("type") == "message" and message.get("data"):
+                data = message["data"]
+                if isinstance(data, bytes):
+                    data = data.decode("utf-8")
+                yield f"data: {data}\n\n"
+    except asyncio.CancelledError:
+        logger.info("SSE stream cancelled for run_id=%s", run_id)
+        raise
+    finally:
+        try:
+            await pubsub.unsubscribe(channel)
+            await pubsub.close()
+            await client.aclose()
+        except Exception as e:
+            logger.warning("Error closing Redis pubsub for run_id=%s: %s", run_id, e)
+
+
+@app.get("/workflow/status/{run_id}/stream")
+async def stream_run_status(
+    run_id: UUID,
+    _: None = Depends(verify_api_key),
+) -> StreamingResponse:
+    """Stream run status via SSE. Subscribe to Redis run:status:{run_id}; heartbeat every 15s."""
+    return StreamingResponse(
+        _sse_run_status_stream(run_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.post("/workflow/profiling", status_code=HTTPStatus.ACCEPTED)
@@ -318,7 +373,7 @@ async def run_job_search_from_profile(
                 )
 
                 # Create Run record (tie to user for delivery email)
-                run = Run(status="pending", user_id=request.user_id)
+                run = Run(status="pending", user_id=str(request.user_id))
                 session.add(run)
                 session.commit()
                 session.refresh(run)
