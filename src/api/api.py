@@ -238,6 +238,75 @@ async def stream_run_status(
     )
 
 
+@app.get("/workflow/status/{run_id}")
+async def get_run_status(
+    run_id: UUID,
+    _: None = Depends(verify_api_key),
+) -> JSONResponse:
+    """Get run status via GET request (fallback when SSE is unavailable).
+
+    Returns all Run fields matching the RunStatusResponse schema.
+    Returns 404 if run not found.
+    """
+    session_gen = db_session()
+    session = next(session_gen)
+    try:
+        run_repo = GenericRepository(session, Run)
+        run = run_repo.get(str(run_id))
+
+        if not run:
+            raise HTTPException(
+                status_code=HTTPStatus.NOT_FOUND,
+                detail=f"Run with id {run_id} not found",
+            )
+
+        # Convert datetime fields to ISO strings
+        completed_at_iso = (
+            run.completed_at.isoformat() + "Z" if run.completed_at else None
+        )
+        delivery_triggered_at_iso = (
+            run.delivery_triggered_at.isoformat() + "Z"
+            if run.delivery_triggered_at
+            else None
+        )
+        created_at_iso = run.created_at.isoformat() + "Z" if run.created_at else None
+        updated_at_iso = run.updated_at.isoformat() + "Z" if run.updated_at else None
+
+        return JSONResponse(
+            content={
+                "run_id": str(run.id),
+                "task_id": run.task_id,
+                "status": run.status,
+                "error_message": run.error_message,
+                "completed_at": completed_at_iso,
+                "user_id": run.user_id,
+                "job_search_id": str(run.job_search_id) if run.job_search_id else None,
+                "total_matched_jobs": run.total_matched_jobs,
+                "research_completed_count": run.research_completed_count,
+                "fabrication_completed_count": run.fabrication_completed_count,
+                "research_failed_count": run.research_failed_count,
+                "fabrication_failed_count": run.fabrication_failed_count,
+                "delivery_triggered": run.delivery_triggered,
+                "delivery_triggered_at": delivery_triggered_at_iso,
+                "created_at": created_at_iso,
+                "updated_at": updated_at_iso,
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get run status: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get run status: {str(e)}",
+        )
+    finally:
+        try:
+            next(session_gen, None)
+        except StopIteration:
+            pass
+
+
 @app.post("/workflow/profiling", status_code=HTTPStatus.ACCEPTED)
 async def run_profiling_workflow(
     context: ProfilingWorkflow.Context,

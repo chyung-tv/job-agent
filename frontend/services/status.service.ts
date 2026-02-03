@@ -5,7 +5,7 @@
  * run status via GET fallback (when backend implements it).
  */
 
-import type { RunStatusResponse } from "@/types/workflow";
+import { runStatusResponseSchema, type RunStatusResponse } from "@/types/workflow";
 
 /**
  * Get the SSE stream URL for a workflow run.
@@ -23,18 +23,40 @@ export function getRunStatusStreamUrl(runId: string): string {
 /**
  * Fetch run status via GET request (fallback when SSE is unavailable).
  * 
- * Note: Backend doesn't currently implement GET /workflow/status/{run_id}.
- * This function is a placeholder for future implementation.
+ * Note: This endpoint requires API_KEY authentication. For client-side usage,
+ * this should be called through a Next.js API route proxy or Server Action
+ * that adds the API_KEY header.
  * 
  * @param runId - UUID of the workflow run
  * @returns Promise resolving to run status response
- * @throws Error indicating this endpoint is not yet implemented
+ * @throws Error if request fails or run not found
  */
 export async function fetchRunStatus(
   runId: string
 ): Promise<RunStatusResponse> {
-  // TODO: Implement when backend adds GET /workflow/status/{run_id} endpoint
-  throw new Error(
-    "GET /workflow/status/{run_id} endpoint not yet implemented. Use SSE stream instead."
-  );
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  const baseUrl = apiUrl.replace(/\/$/, "");
+  const url = `${baseUrl}/workflow/status/${runId}`;
+
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error(`Run with id ${runId} not found`);
+    }
+    const errorText = await response.text().catch(() => "Unknown error");
+    throw new Error(
+      `Failed to fetch run status: ${response.status} ${response.statusText}. ${errorText}`
+    );
+  }
+
+  const data = await response.json();
+  
+  // Validate response with Zod schema
+  return runStatusResponseSchema.parse(data);
 }

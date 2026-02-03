@@ -50,13 +50,46 @@ set_compose() {
 # -----------------------------------------------------------------------------
 action_first_time() {
   check_env
+  load_env
   set_compose
-  echo "First-time setup: starting stack, then running migrations..."
+  
+  # Validate required env vars
+  if [ -z "${POSTGRES_PASSWORD:-}" ] || [ -z "${POSTGRES_UI_PASSWORD:-}" ]; then
+    echo "Error: POSTGRES_PASSWORD and POSTGRES_UI_PASSWORD must be set in .env"
+    exit 1
+  fi
+  
+  echo "=== First-time setup: Complete database initialization ==="
+  echo "1. Starting stack..."
   $COMPOSE_BASE up -d
-  echo "Waiting for Postgres to be ready..."
+  
+  echo "2. Waiting for Postgres to be ready..."
   sleep 5
+  
+  echo "3. Dropping existing schema (if any)..."
+  $COMPOSE_RUN_API python -m src.database.reset_db
+  
+  echo "4. Creating users (job_agent_admin, job_agent_ui)..."
+  ADMIN_ESC="${POSTGRES_PASSWORD//\'/\'\'}"
+  UI_ESC="${POSTGRES_UI_PASSWORD//\'/\'\'}"
+  if ! cat scripts/grant-two-users-existing-db.sql | $COMPOSE_BASE exec -T postgres \
+    psql -v ON_ERROR_STOP=1 -U postgres -d "${POSTGRES_DB:-job_agent}" \
+    -v admin_pass="${ADMIN_ESC}" -v ui_pass="${UI_ESC}" -f -; then
+    echo "Error: Failed to create users. Check logs."
+    exit 1
+  fi
+  
+  echo "5. Running migrations (creating tables)..."
   $COMPOSE_RUN_API alembic upgrade head
-  echo "Done. Stack is up; database at alembic head."
+  
+  echo "6. Granting Better Auth permissions to UI account..."
+  if ! cat scripts/grant-better-auth-permissions.sql | $COMPOSE_BASE exec -T postgres \
+    psql -v ON_ERROR_STOP=1 -U postgres -d "${POSTGRES_DB:-job_agent}" -f -; then
+    echo "Warning: Failed to grant Better Auth permissions. You may need to run this manually."
+  fi
+  
+  echo "=== Setup complete! ==="
+  echo "Stack is up; database initialized with users and permissions."
 }
 
 action_overwrite() {
@@ -82,7 +115,15 @@ action_migrate() {
   set_compose
   echo "Running migrations (alembic upgrade head)..."
   $COMPOSE_RUN_API alembic upgrade head
-  echo "Done. Database at alembic head."
+  
+  echo "Granting Better Auth permissions to UI account..."
+  load_env
+  if ! cat scripts/grant-better-auth-permissions.sql | $COMPOSE_BASE exec -T postgres \
+    psql -v ON_ERROR_STOP=1 -U postgres -d "${POSTGRES_DB:-job_agent}" -f -; then
+    echo "Warning: Failed to grant Better Auth permissions."
+  fi
+  
+  echo "Done. Database at alembic head with permissions granted."
 }
 
 action_two_users() {

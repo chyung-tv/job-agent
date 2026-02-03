@@ -11,30 +11,13 @@ import {
 } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { authClient } from "@/lib/auth-client";
-import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { useState } from "react";
 
-export default function SignUpPage() {
-  const router = useRouter();
+export default function SignInPage() {
   const searchParams = useSearchParams();
   const callbackUrl = searchParams.get("callbackUrl") || "/redirect";
   const [isLoading, setIsLoading] = useState(false);
-
-  // Client-side guard: if already authenticated, redirect away from signup
-  useEffect(() => {
-    async function checkSession() {
-      try {
-        const session = await authClient.getSession();
-        if (session?.data?.user) {
-          router.replace("/redirect");
-        }
-      } catch (error) {
-        console.error("Failed to check session on signup page:", error);
-      }
-    }
-
-    checkSession();
-  }, [router]);
 
   const handleGoogleSignIn = async () => {
     try {
@@ -54,9 +37,9 @@ export default function SignUpPage() {
     <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4 py-12 dark:bg-gray-900">
       <Card className="w-full max-w-md">
         <CardHeader className="space-y-1">
-          <CardTitle className="text-2xl font-bold">Create an account</CardTitle>
+          <CardTitle className="text-2xl font-bold">Sign in</CardTitle>
           <CardDescription>
-            Sign up to get started with Job Agent
+            Sign in to your Job Agent account to continue
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -97,7 +80,7 @@ export default function SignUpPage() {
         </CardContent>
         <CardFooter className="flex flex-col space-y-4">
           <p className="text-center text-sm text-muted-foreground">
-            By signing up, you agree to our Terms of Service and Privacy Policy
+            By signing in, you agree to our Terms of Service and Privacy Policy
           </p>
         </CardFooter>
       </Card>
