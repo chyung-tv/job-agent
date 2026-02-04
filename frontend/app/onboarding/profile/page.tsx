@@ -32,10 +32,12 @@ export default async function OnboardingProfilePage() {
     );
   }
 
+  // Get CV file names from onboarding store if available, otherwise extract from URLs
   const cvLinks = profile.source_pdfs ?? [];
   const references = profile.references
     ? Object.entries(profile.references)
     : [];
+  const suggestedJobTitles = profile.suggested_job_titles ?? [];
 
   return (
     <Card className="w-full">
@@ -68,16 +70,36 @@ export default async function OnboardingProfilePage() {
               Uploaded CVs
             </Label>
             <ul className="list-inside space-y-1 text-sm">
-              {cvLinks.map((url, i) => (
-                <li key={i}>
-                  <a
-                    href={url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-primary hover:underline"
-                  >
-                    {typeof url === "string" ? url.split("/").pop() ?? url : "CV link"}
-                  </a>
+              {cvLinks.map((url, i) => {
+                // Extract filename from URL, removing query parameters
+                const urlObj = new URL(url);
+                const filename = urlObj.pathname.split("/").pop() || `CV ${i + 1}`;
+                return (
+                  <li key={i}>
+                    <a
+                      href={url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline"
+                    >
+                      {filename}
+                    </a>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+
+        {suggestedJobTitles.length > 0 && (
+          <div className="space-y-2">
+            <Label className="text-sm text-muted-foreground">
+              Suggested Job Titles
+            </Label>
+            <ul className="list-inside space-y-1 text-sm">
+              {suggestedJobTitles.map((title, i) => (
+                <li key={i} className="text-foreground">
+                  {title}
                 </li>
               ))}
             </ul>

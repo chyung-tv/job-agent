@@ -11,6 +11,7 @@ export interface OnboardingProfile {
   email: string;
   source_pdfs: string[] | null;
   references: Record<string, unknown> | null;
+  suggested_job_titles: string[] | null;
 }
 
 /**
@@ -36,6 +37,7 @@ export async function getOnboardingProfile(): Promise<OnboardingProfile | null> 
       email: true,
       source_pdfs: true,
       references: true,
+      suggested_job_titles: true,
     },
   });
 
@@ -43,15 +45,31 @@ export async function getOnboardingProfile(): Promise<OnboardingProfile | null> 
     return null;
   }
 
-  const source_pdfs = user.source_pdfs as string[] | null;
+  // Handle source_pdfs: can be array of strings or object with keys
+  let source_pdfs: string[] | null = null;
+  if (user.source_pdfs) {
+    if (Array.isArray(user.source_pdfs)) {
+      source_pdfs = user.source_pdfs;
+    } else if (typeof user.source_pdfs === "object") {
+      // If it's an object, extract values (URLs)
+      source_pdfs = Object.values(user.source_pdfs).filter(
+        (v): v is string => typeof v === "string"
+      );
+    }
+  }
+
   const references = user.references as Record<string, unknown> | null;
+  const suggested_job_titles = user.suggested_job_titles as string[] | null;
 
   return {
     profile_text: user.profile_text,
     location: user.location,
     name: user.name,
     email: user.email,
-    source_pdfs: Array.isArray(source_pdfs) ? source_pdfs : null,
+    source_pdfs,
     references: references && typeof references === "object" ? references : null,
+    suggested_job_titles: Array.isArray(suggested_job_titles)
+      ? suggested_job_titles
+      : null,
   };
 }
