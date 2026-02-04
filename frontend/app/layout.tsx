@@ -5,6 +5,7 @@ import { extractRouterConfig } from "uploadthing/server";
 import { ourFileRouter } from "@/app/api/uploadthing/core";
 import { AppHeader } from "@/components/layout/AppHeader";
 import "./globals.css";
+import "@uploadthing/react/styles.css";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",

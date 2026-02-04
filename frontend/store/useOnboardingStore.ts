@@ -1,27 +1,29 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 
+export type CvFile = { url: string; name: string };
+
 /**
  * Onboarding state interface.
- * 
+ *
  * Stores user information collected during the onboarding flow:
  * - Identity: name, email, location
  * - Cultural Persona: basic_info (from Vibe Check)
- * - CV URLs: cv_urls (from UploadThing)
+ * - CV files: cv_files (url + name from UploadThing for display and submission)
  */
 interface OnboardingState {
   name: string | null;
   email: string | null;
   location: string | null;
   basic_info: string | null; // Cultural Persona from Vibe Check
-  cv_urls: string[]; // Array of public URLs from UploadThing
+  cv_files: CvFile[]; // url + name from UploadThing (name for UI, url for submission)
 
   // Actions
   setName: (name: string) => void;
   setEmail: (email: string) => void;
   setLocation: (location: string) => void;
   setBasicInfo: (basic_info: string) => void;
-  addCvUrl: (url: string) => void;
+  addCvFile: (file: CvFile) => void;
   reset: () => void;
 }
 
@@ -80,7 +82,7 @@ export const useOnboardingStore = create<OnboardingState>()(
       email: null,
       location: null,
       basic_info: null,
-      cv_urls: [],
+      cv_files: [],
 
       // Actions
       setName: (name: string) => set({ name }),
@@ -88,9 +90,9 @@ export const useOnboardingStore = create<OnboardingState>()(
       setLocation: (location: string) => set({ location }),
       setBasicInfo: (basic_info: string) =>
         set({ basic_info }),
-      addCvUrl: (url: string) =>
+      addCvFile: (file: CvFile) =>
         set((state) => ({
-          cv_urls: [...state.cv_urls, url],
+          cv_files: [...state.cv_files, file],
         })),
       reset: () =>
         set({
@@ -98,12 +100,26 @@ export const useOnboardingStore = create<OnboardingState>()(
           email: null,
           location: null,
           basic_info: null,
-          cv_urls: [],
+          cv_files: [],
         }),
     }),
     {
       name: "onboarding-storage",
       storage: createJSONStorage(() => sessionStorageImpl),
+      migrate: (persistedState, version) => {
+        const s = persistedState as Record<string, unknown> & { cv_urls?: string[]; cv_files?: CvFile[] };
+        if (s?.cv_urls?.length && !s?.cv_files?.length) {
+          return {
+            ...s,
+            cv_files: s.cv_urls.map((url, i) => ({
+              url,
+              name: url.split("/").pop() || `File ${i + 1}`,
+            })),
+            cv_urls: undefined,
+          };
+        }
+        return persistedState as OnboardingState;
+      },
     }
   )
 );
