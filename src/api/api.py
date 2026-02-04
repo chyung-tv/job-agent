@@ -12,10 +12,12 @@ if str(project_root) not in sys.path:
 
 from http import HTTPStatus
 import logging
+import os
 from typing import AsyncGenerator, Optional
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from redis.asyncio import Redis
@@ -40,6 +42,17 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Job Agent API", version="1.0.0")
+
+# CORS: allow frontend origin(s) for direct browser → API requests (e.g. VPS app domain).
+# SSE stream is proxied through Next.js so it does not hit the backend from the browser.
+_cors_origins = os.environ.get("CORS_ORIGINS", "http://localhost:3000")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in _cors_origins.split(",") if o.strip()],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+)
 
 
 def verify_api_key(request: Request) -> None:

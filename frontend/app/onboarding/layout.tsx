@@ -11,6 +11,9 @@ const steps = [
   { id: "identity", label: "Identity", path: "/onboarding/identity" },
   { id: "uploads", label: "Uploads", path: "/onboarding/uploads" },
   { id: "review", label: "Review", path: "/onboarding/review" },
+  { id: "processing", label: "Processing", path: "/onboarding/processing" },
+  { id: "chat", label: "Chat", path: "/onboarding/chat" },
+  { id: "profile", label: "Profile", path: "/onboarding/profile" },
 ];
 
 export default function OnboardingLayout({
@@ -19,7 +22,9 @@ export default function OnboardingLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const currentStepIndex = steps.findIndex((step) => step.path === pathname);
+  const currentStepIndex = steps.findIndex(
+    (step) => step.path === pathname || pathname.startsWith(step.path + "/")
+  );
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4 py-12 dark:bg-gray-900">

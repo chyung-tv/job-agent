@@ -92,7 +92,16 @@ export async function triggerProfiling(
   });
 
   // Validate response
-  return profilingWorkflowResponseSchema.parse(response);
+  const parsed = profilingWorkflowResponseSchema.parse(response);
+  if (validatedData.basic_info) {
+    console.log(
+      "[triggerProfiling] Second profiling trigger (basic_info present), run_id:",
+      parsed.run_id,
+      "task_id:",
+      parsed.task_id
+    );
+  }
+  return parsed;
 }
 
 /**

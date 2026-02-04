@@ -14,7 +14,7 @@ export const auth = betterAuth({
       clientSecret: process.env.BETTER_AUTH_GOOGLE_CLIENT_SECRET!,
     },
   },
-  advanced: {
-    trustHost: true, // Required when running behind Caddy or other reverse proxy
-  },
+  // trustHost required when running behind Caddy or other reverse proxy
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  advanced: { trustHost: true } as any,
 });

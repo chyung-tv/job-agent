@@ -9,15 +9,14 @@ import { runStatusResponseSchema, type RunStatusResponse } from "@/types/workflo
 
 /**
  * Get the SSE stream URL for a workflow run.
- * 
+ * Uses same-origin Next.js proxy so the browser does not need to send the API key
+ * and CORS is avoided.
+ *
  * @param runId - UUID of the workflow run
- * @returns Full URL for the SSE status stream endpoint
+ * @returns Same-origin path to the proxy (e.g. /api/workflow/status/{runId}/stream)
  */
 export function getRunStatusStreamUrl(runId: string): string {
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-  // Remove trailing slash if present
-  const baseUrl = apiUrl.replace(/\/$/, "");
-  return `${baseUrl}/workflow/status/${runId}/stream`;
+  return `/api/workflow/status/${runId}/stream`;
 }
 
 /**

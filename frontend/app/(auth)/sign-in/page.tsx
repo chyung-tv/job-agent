@@ -12,9 +12,9 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { authClient } from "@/lib/auth-client";
 import { useSearchParams } from "next/navigation";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 
-export default function SignInPage() {
+function SignInContent() {
   const searchParams = useSearchParams();
   const callbackUrl = searchParams.get("callbackUrl") || "/redirect";
   const [isLoading, setIsLoading] = useState(false);
@@ -85,5 +85,13 @@ export default function SignInPage() {
         </CardFooter>
       </Card>
     </div>
+  );
+}
+
+export default function SignInPage() {
+  return (
+    <Suspense fallback={<div className="flex min-h-screen items-center justify-center">Loading...</div>}>
+      <SignInContent />
+    </Suspense>
   );
 }

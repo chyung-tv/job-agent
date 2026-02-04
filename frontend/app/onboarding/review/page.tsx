@@ -1,5 +1,6 @@
 "use client";
 
+import { triggerProfiling } from "@/actions/workflow";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -17,7 +18,7 @@ import { useState } from "react";
 
 export default function ReviewPage() {
   const router = useRouter();
-  const { name, email, location, cv_files, reset } = useOnboardingStore();
+  const { name, email, location, cv_files } = useOnboardingStore();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitSuccess, setSubmitSuccess] = useState(false);
@@ -35,38 +36,23 @@ export default function ReviewPage() {
   };
 
   const handleSubmit = async () => {
+    if (!name || !email || !location || cv_files.length === 0) {
+      setSubmitError("Please complete identity and upload at least one CV.");
+      return;
+    }
     try {
       setIsSubmitting(true);
       setSubmitError(null);
 
-      // Construct payload (API expects cv_urls; we keep keys/URLs for submission)
-      const payload = {
+      const response = await triggerProfiling({
         name,
         email,
         location,
         cv_urls: cv_files.map((f) => f.url),
-      };
-
-      // Call placeholder API
-      const response = await fetch("/api/placeholder", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
       });
 
-      if (!response.ok) {
-        throw new Error("Failed to submit onboarding data");
-      }
-
       setSubmitSuccess(true);
-
-      // Clear store after successful submission
-      setTimeout(() => {
-        reset();
-        router.push("/dashboard");
-      }, 2000);
+      router.push(`/onboarding/processing?run_id=${response.run_id}`);
     } catch (error) {
       console.error("Submission error:", error);
       setSubmitError(
