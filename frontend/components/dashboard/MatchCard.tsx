@@ -8,6 +8,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Building2, MapPin, FileCheck, ArrowRight } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
@@ -26,23 +27,26 @@ interface MatchCardProps {
 
 export function MatchCard({ match }: MatchCardProps) {
   return (
-    <Card className="flex flex-col">
+    <Card className="group flex flex-col transition-all duration-200 hover:shadow-md hover:shadow-primary/5 hover:border-primary/20">
       <CardHeader className="pb-3">
-        <div className="flex items-start justify-between">
-          <div className="space-y-1">
-            <CardTitle className="line-clamp-2 text-base">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0 flex-1 space-y-1">
+            <CardTitle className="line-clamp-2 text-base group-hover:text-primary transition-colors">
               {match.title}
             </CardTitle>
             <CardDescription className="flex items-center gap-1">
-              <Building2 className="h-3 w-3" />
-              {match.company}
+              <Building2 className="h-3 w-3 shrink-0" />
+              <span className="truncate">{match.company}</span>
             </CardDescription>
           </div>
           {match.hasArtifacts && (
-            <div className="flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700 dark:bg-green-900 dark:text-green-300">
+            <Badge
+              variant="outline"
+              className="shrink-0 gap-1 border-green-500/30 bg-green-500/10 text-green-600 dark:text-green-400"
+            >
               <FileCheck className="h-3 w-3" />
               Ready
-            </div>
+            </Badge>
           )}
         </div>
       </CardHeader>
@@ -61,10 +65,10 @@ export function MatchCard({ match }: MatchCardProps) {
         <span className="text-xs text-muted-foreground">
           {formatDistanceToNow(new Date(match.createdAt), { addSuffix: true })}
         </span>
-        <Button asChild size="sm" variant="ghost">
+        <Button asChild size="sm" variant="ghost" className="gap-1 group-hover:bg-primary group-hover:text-primary-foreground transition-colors">
           <Link href={`/dashboard/matches/${match.id}`}>
             View Details
-            <ArrowRight className="ml-1 h-3 w-3" />
+            <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
           </Link>
         </Button>
       </CardFooter>

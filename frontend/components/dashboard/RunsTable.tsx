@@ -2,6 +2,15 @@
 
 import { RunStatusBadge } from "./RunStatusBadge";
 import { formatDistanceToNow } from "date-fns";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Hash, Clock, Calendar, CheckCircle2 } from "lucide-react";
 
 interface Run {
   id: string;
@@ -20,51 +29,71 @@ interface RunsTableProps {
 
 export function RunsTable({ runs }: RunsTableProps) {
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full">
-        <thead>
-          <tr className="border-b text-left text-sm text-muted-foreground">
-            <th className="pb-3 pr-4 font-medium">Run ID</th>
-            <th className="pb-3 pr-4 font-medium">Status</th>
-            <th className="pb-3 pr-4 font-medium">Matches</th>
-            <th className="pb-3 pr-4 font-medium">Created</th>
-            <th className="pb-3 font-medium">Completed</th>
-          </tr>
-        </thead>
-        <tbody>
-          {runs.map((run) => (
-            <tr key={run.id} className="border-b last:border-0">
-              <td className="py-3 pr-4">
-                <code className="text-xs text-muted-foreground">
-                  {run.id.slice(0, 8)}...
-                </code>
-              </td>
-              <td className="py-3 pr-4">
-                <RunStatusBadge runId={run.id} initialStatus={run.status} />
-              </td>
-              <td className="py-3 pr-4 text-sm">
-                {run.total_matched_jobs > 0 ? (
-                  <span className="font-medium">{run.total_matched_jobs}</span>
-                ) : (
-                  <span className="text-muted-foreground">-</span>
-                )}
-              </td>
-              <td className="py-3 pr-4 text-sm text-muted-foreground">
-                {formatDistanceToNow(new Date(run.created_at), {
-                  addSuffix: true,
-                })}
-              </td>
-              <td className="py-3 text-sm text-muted-foreground">
-                {run.completed_at
-                  ? formatDistanceToNow(new Date(run.completed_at), {
-                      addSuffix: true,
-                    })
-                  : "-"}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <Table>
+      <TableHeader>
+        <TableRow className="hover:bg-transparent">
+          <TableHead>
+            <div className="flex items-center gap-1.5">
+              <Hash className="h-3.5 w-3.5 text-muted-foreground" />
+              Run ID
+            </div>
+          </TableHead>
+          <TableHead>
+            <div className="flex items-center gap-1.5">
+              <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+              Status
+            </div>
+          </TableHead>
+          <TableHead>
+            <div className="flex items-center gap-1.5">
+              <CheckCircle2 className="h-3.5 w-3.5 text-muted-foreground" />
+              Matches
+            </div>
+          </TableHead>
+          <TableHead>
+            <div className="flex items-center gap-1.5">
+              <Calendar className="h-3.5 w-3.5 text-muted-foreground" />
+              Created
+            </div>
+          </TableHead>
+          <TableHead>Completed</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {runs.map((run) => (
+          <TableRow key={run.id}>
+            <TableCell>
+              <code className="rounded bg-muted px-1.5 py-0.5 text-xs font-mono text-muted-foreground">
+                {run.id.slice(0, 8)}...
+              </code>
+            </TableCell>
+            <TableCell>
+              <RunStatusBadge runId={run.id} initialStatus={run.status} />
+            </TableCell>
+            <TableCell>
+              {run.total_matched_jobs > 0 ? (
+                <span className="inline-flex items-center justify-center rounded-full bg-primary/10 px-2 py-0.5 text-sm font-semibold text-primary">
+                  {run.total_matched_jobs}
+                </span>
+              ) : (
+                <span className="text-muted-foreground">—</span>
+              )}
+            </TableCell>
+            <TableCell className="text-muted-foreground">
+              {formatDistanceToNow(new Date(run.created_at), {
+                addSuffix: true,
+              })}
+            </TableCell>
+            <TableCell className="text-muted-foreground">
+              {run.completed_at
+                ? formatDistanceToNow(new Date(run.completed_at), {
+                    addSuffix: true,
+                  })
+                : "—"}
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   );
 }

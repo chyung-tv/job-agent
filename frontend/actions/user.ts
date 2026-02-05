@@ -106,6 +106,7 @@ export interface UserWithProfile {
   profile_text: string | null;
   suggested_job_titles: string[] | null;
   source_pdfs: string[] | null;
+  hasAccess: boolean;
 }
 
 /**
@@ -131,6 +132,7 @@ export async function getCurrentUserWithProfile(): Promise<UserWithProfile | nul
       profile_text: true,
       suggested_job_titles: true,
       source_pdfs: true,
+      hasAccess: true,
     },
   });
 
@@ -162,5 +164,6 @@ export async function getCurrentUserWithProfile(): Promise<UserWithProfile | nul
       ? suggested_job_titles
       : null,
     source_pdfs,
+    hasAccess: user.hasAccess,
   };
 }

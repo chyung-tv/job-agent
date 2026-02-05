@@ -3,7 +3,9 @@ import { auth } from "@/lib/auth";
 import prisma from "@/lib/prisma";
 import { MatchCard } from "@/components/dashboard/MatchCard";
 import { EmptyState } from "@/components/dashboard/EmptyState";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Briefcase, Target } from "lucide-react";
 
 export default async function MatchesPage() {
   const session = await auth.api.getSession({
@@ -26,18 +28,33 @@ export default async function MatchesPage() {
 
   // Filter to only show actual matches (is_match = true)
   const actualMatches = matches.filter((m) => m.is_match);
+  const readyMatches = actualMatches.filter((m) => m.artifacts);
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Job Matches</h1>
-        <p className="text-muted-foreground">
-          Jobs that match your profile, with tailored CVs and cover letters.
-        </p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Job Matches</h1>
+          <p className="text-muted-foreground">
+            Jobs that match your profile, with tailored CVs and cover letters.
+          </p>
+        </div>
+        {actualMatches.length > 0 && (
+          <div className="flex items-center gap-2">
+            <Badge variant="secondary" className="gap-1">
+              <Target className="h-3 w-3" />
+              {actualMatches.length} matches
+            </Badge>
+            <Badge variant="outline" className="gap-1 border-green-500/30 bg-green-500/10 text-green-600 dark:text-green-400">
+              <Briefcase className="h-3 w-3" />
+              {readyMatches.length} ready
+            </Badge>
+          </div>
+        )}
       </div>
 
       {actualMatches.length === 0 ? (
-        <Card>
+        <Card className="transition-all duration-200 hover:shadow-md">
           <CardContent className="pt-6">
             <EmptyState
               title="No matches yet"

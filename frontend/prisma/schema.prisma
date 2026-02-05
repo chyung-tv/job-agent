@@ -162,6 +162,7 @@ model user {
   source_pdfs          Json?          @db.Json
   references           Json?          @db.Json
   last_used_at         DateTime?      @db.Timestamp(6)
+  hasAccess            Boolean        @default(false)
   account              account[]
   job_searches         job_searches[]
   matched_jobs         matched_jobs[]

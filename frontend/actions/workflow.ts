@@ -7,6 +7,9 @@
  * to authenticate with the FastAPI backend. API_KEY is never exposed to the client.
  */
 
+import { auth } from "@/lib/auth";
+import prisma from "@/lib/prisma";
+import { headers } from "next/headers";
 import {
   profilingWorkflowRequestSchema,
   profilingWorkflowResponseSchema,
@@ -71,6 +74,34 @@ async function makeApiRequest<T>(
 }
 
 /**
+ * Check if current user has beta access.
+ * Throws an error if user doesn't have access.
+ * @returns The authenticated user's ID
+ */
+async function requireBetaAccess(): Promise<string> {
+  const session = await auth.api.getSession({
+    headers: await headers(),
+  });
+
+  if (!session?.user?.id) {
+    throw new Error("Authentication required");
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: { hasAccess: true },
+  });
+
+  if (!user?.hasAccess) {
+    throw new Error(
+      "Beta access required. Please email chyung.tv@gmail.com to request access."
+    );
+  }
+
+  return session.user.id;
+}
+
+/**
  * Trigger the profiling workflow.
  * 
  * @param data - Profiling workflow request data
@@ -109,11 +140,14 @@ export async function triggerProfiling(
  * 
  * @param data - Job search workflow request data
  * @returns Job search workflow response with run_id and status
- * @throws Error if validation fails or API request fails
+ * @throws Error if validation fails, user lacks beta access, or API request fails
  */
 export async function triggerJobSearch(
   data: JobSearchWorkflowRequest
 ): Promise<JobSearchWorkflowResponse> {
+  // Check beta access FIRST (server-side enforcement)
+  await requireBetaAccess();
+
   // Validate request data
   const validatedData = jobSearchWorkflowRequestSchema.parse(data);
 
@@ -137,11 +171,14 @@ export async function triggerJobSearch(
  * 
  * @param data - Job search from profile request data
  * @returns Job search from profile response with job titles and counts
- * @throws Error if validation fails or API request fails
+ * @throws Error if validation fails, user lacks beta access, or API request fails
  */
 export async function triggerJobSearchFromProfile(
   data: JobSearchFromProfileRequest
 ): Promise<JobSearchFromProfileResponse> {
+  // Check beta access FIRST (server-side enforcement)
+  await requireBetaAccess();
+
   // Validate request data
   const validatedData = jobSearchFromProfileRequestSchema.parse(data);
 

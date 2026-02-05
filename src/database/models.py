@@ -65,6 +65,13 @@ class User(Base):
         nullable=False,
         doc="Updated timestamp (Better Auth)",
     )
+    # Beta access control
+    hasAccess = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        doc="Beta access control - manually toggled by admin",
+    )
     # Profile columns (nullable)
     location = Column(String(255), nullable=True, doc="Preferred job search location")
     profile_text = Column(Text, nullable=True, doc="Structured profile text from PDFs")

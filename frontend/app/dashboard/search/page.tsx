@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Search, Sparkles, Loader2 } from "lucide-react";
+import { Search, Sparkles, Loader2, MapPin, AlertTriangle } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -14,6 +14,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { EmptyState } from "@/components/dashboard/EmptyState";
 import {
   getCurrentUserWithProfile,
@@ -23,6 +25,7 @@ import {
   triggerJobSearch,
   triggerJobSearchFromProfile,
 } from "@/actions/workflow";
+import { cn } from "@/lib/utils";
 
 export default function SearchPage() {
   const router = useRouter();
@@ -133,13 +136,17 @@ export default function SearchPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          <p className="text-sm text-muted-foreground">Loading your profile...</p>
+        </div>
       </div>
     );
   }
 
   const hasProfile = !!user?.profile_text;
   const suggestedJobTitles = user?.suggested_job_titles || [];
+  const hasAccess = user?.hasAccess ?? false;
 
   return (
     <div className="space-y-6">
@@ -149,6 +156,25 @@ export default function SearchPage() {
           Search for jobs using a custom query or your profile&apos;s suggested titles.
         </p>
       </div>
+
+      {/* Beta Access Required Banner */}
+      {!hasAccess && hasProfile && (
+        <Alert className="border-amber-500 bg-amber-50 dark:bg-amber-950/20">
+          <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-500" />
+          <AlertTitle className="text-amber-800 dark:text-amber-200">
+            Beta Access Required
+          </AlertTitle>
+          <AlertDescription className="text-amber-700 dark:text-amber-300">
+            This feature is currently in beta. To request access, please email{" "}
+            <a
+              href="mailto:chyung.tv@gmail.com"
+              className="font-medium underline hover:text-amber-900 dark:hover:text-amber-100"
+            >
+              chyung.tv@gmail.com
+            </a>
+          </AlertDescription>
+        </Alert>
+      )}
 
       {!hasProfile ? (
         <EmptyState
@@ -160,10 +186,12 @@ export default function SearchPage() {
       ) : (
         <div className="grid gap-6 md:grid-cols-2">
           {/* Custom Search Card */}
-          <Card>
+          <Card className="group transition-all duration-200 hover:shadow-md hover:shadow-primary/5 hover:border-primary/20">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <Search className="h-5 w-5" />
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary group-hover:bg-primary group-hover:text-primary-foreground transition-colors">
+                  <Search className="h-4 w-4" />
+                </div>
                 Custom Search
               </CardTitle>
               <CardDescription>
@@ -179,7 +207,7 @@ export default function SearchPage() {
                     placeholder="e.g. Software Engineer"
                     value={jobTitle}
                     onChange={(e) => setJobTitle(e.target.value)}
-                    disabled={searching}
+                    disabled={searching || !hasAccess}
                   />
                 </div>
                 <div className="space-y-2">
@@ -189,18 +217,22 @@ export default function SearchPage() {
                     placeholder="e.g. Hong Kong"
                     value={location}
                     onChange={(e) => setLocation(e.target.value)}
-                    disabled={searching}
+                    disabled={searching || !hasAccess}
                   />
                 </div>
-                <Button type="submit" className="w-full" disabled={searching}>
+                <Button
+                  type="submit"
+                  className="w-full gap-1.5"
+                  disabled={searching || !hasAccess}
+                >
                   {searching ? (
                     <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      <Loader2 className="h-4 w-4 animate-spin" />
                       Searching...
                     </>
                   ) : (
                     <>
-                      <Search className="mr-2 h-4 w-4" />
+                      <Search className="h-4 w-4" />
                       Search Jobs
                     </>
                   )}
@@ -210,10 +242,12 @@ export default function SearchPage() {
           </Card>
 
           {/* Search from Profile Card */}
-          <Card>
+          <Card className="group transition-all duration-200 hover:shadow-md hover:shadow-primary/5 hover:border-primary/20">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <Sparkles className="h-5 w-5" />
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary group-hover:bg-primary group-hover:text-primary-foreground transition-colors">
+                  <Sparkles className="h-4 w-4" />
+                </div>
                 Search from Profile
               </CardTitle>
               <CardDescription>
@@ -226,18 +260,27 @@ export default function SearchPage() {
                   <div>
                     <Label className="mb-2 block">Suggested Job Titles</Label>
                     <p className="mb-3 text-xs text-muted-foreground">
-                      Click on a title to search for that specific job, or use the button below to search all.
+                      {hasAccess
+                        ? "Click on a title to search for that specific job, or use the button below to search all."
+                        : "Request beta access to search for jobs."}
                     </p>
                     <div className="flex flex-wrap gap-2">
                       {suggestedJobTitles.map((title, index) => (
-                        <button
+                        <Badge
                           key={index}
-                          onClick={() => handleSingleJobTitleSearch(title)}
-                          disabled={searching || searchingFromProfile}
-                          className="rounded-full bg-primary/10 px-3 py-1 text-sm text-primary transition-colors hover:bg-primary/20 disabled:opacity-50"
+                          variant="outline"
+                          className={cn(
+                            "transition-all",
+                            hasAccess
+                              ? "cursor-pointer hover:bg-primary hover:text-primary-foreground hover:border-primary"
+                              : "cursor-not-allowed opacity-50"
+                          )}
+                          onClick={() =>
+                            hasAccess && handleSingleJobTitleSearch(title)
+                          }
                         >
                           {title}
-                        </button>
+                        </Badge>
                       ))}
                     </div>
                   </div>
@@ -245,17 +288,17 @@ export default function SearchPage() {
                     <Button
                       onClick={handleSearchFromProfile}
                       variant="outline"
-                      className="w-full"
-                      disabled={searching || searchingFromProfile}
+                      className="w-full gap-1.5"
+                      disabled={searching || searchingFromProfile || !hasAccess}
                     >
                       {searchingFromProfile ? (
                         <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          <Loader2 className="h-4 w-4 animate-spin" />
                           Starting searches...
                         </>
                       ) : (
                         <>
-                          <Sparkles className="mr-2 h-4 w-4" />
+                          <Sparkles className="h-4 w-4" />
                           Search All ({suggestedJobTitles.length} titles)
                         </>
                       )}
@@ -269,9 +312,10 @@ export default function SearchPage() {
               )}
 
               {user?.location && (
-                <p className="text-xs text-muted-foreground">
-                  Location: {user.location}
-                </p>
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground pt-2 border-t">
+                  <MapPin className="h-3.5 w-3.5" />
+                  <span>Location: {user.location}</span>
+                </div>
               )}
             </CardContent>
           </Card>

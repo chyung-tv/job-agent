@@ -2,8 +2,9 @@
 
 import { useRouter } from "next/navigation";
 import { useRunStatus } from "@/hooks/useRunStatus";
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { Loader2 } from "lucide-react";
+import { Loader2, CheckCircle2, XCircle, Clock, Zap } from "lucide-react";
 
 interface RunStatusBadgeProps {
   runId: string;
@@ -12,25 +13,36 @@ interface RunStatusBadgeProps {
 
 const statusConfig: Record<
   string,
-  { label: string; className: string; showSpinner?: boolean }
+  {
+    label: string;
+    variant: "default" | "secondary" | "destructive" | "outline";
+    className: string;
+    icon: React.ComponentType<{ className?: string }>;
+  }
 > = {
   pending: {
     label: "Pending",
-    className: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
-    showSpinner: true,
+    variant: "outline",
+    className: "border-yellow-500/30 bg-yellow-500/10 text-yellow-600 dark:text-yellow-400",
+    icon: Clock,
   },
   processing: {
     label: "Processing",
-    className: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
-    showSpinner: true,
+    variant: "outline",
+    className: "border-blue-500/30 bg-blue-500/10 text-blue-600 dark:text-blue-400",
+    icon: Zap,
   },
   completed: {
     label: "Completed",
-    className: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
+    variant: "outline",
+    className: "border-green-500/30 bg-green-500/10 text-green-600 dark:text-green-400",
+    icon: CheckCircle2,
   },
   failed: {
     label: "Failed",
-    className: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
+    variant: "destructive",
+    className: "",
+    icon: XCircle,
   },
 };
 
@@ -52,20 +64,25 @@ export function RunStatusBadge({ runId, initialStatus }: RunStatusBadgeProps) {
   // Use live status if available and streaming, otherwise use initial
   const currentStatus = shouldStream && liveStatus ? liveStatus : initialStatus;
   const config = statusConfig[currentStatus] || statusConfig.pending;
+  const isActive = currentStatus === "pending" || currentStatus === "processing";
+  const Icon = config.icon;
 
   return (
     <div className="flex items-center gap-2">
-      <span
+      <Badge
+        variant={config.variant}
         className={cn(
-          "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium",
+          "gap-1.5 font-medium",
           config.className
         )}
       >
-        {config.showSpinner && (
+        {isActive ? (
           <Loader2 className="h-3 w-3 animate-spin" />
+        ) : (
+          <Icon className="h-3 w-3" />
         )}
         {config.label}
-      </span>
+      </Badge>
       {shouldStream && node && (
         <span className="text-xs text-muted-foreground">
           {node.replace(/_/g, " ")}
