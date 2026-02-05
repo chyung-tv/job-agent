@@ -1,3 +1,15 @@
+# Apex domain redirect: yourapp.com -> app.yourapp.com
+# Only active when APEX_DOMAIN is set in .env
+{$APEX_DOMAIN} {
+	redir https://{$FRONTEND_DOMAIN}{uri} permanent
+}
+
+# Frontend: app subdomain (e.g. app.yourapp.com)
+# Set FRONTEND_DOMAIN in .env for production
+{$FRONTEND_DOMAIN} {
+	reverse_proxy frontend:3000
+}
+
 # API: set API_DOMAIN in .env (e.g. api.yourapp.com or localhost for local)
 # read_timeout 600s keeps long-lived SSE connections (e.g. /workflow/status/{run_id}/stream) open
 {$API_DOMAIN} {

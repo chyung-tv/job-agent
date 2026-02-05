@@ -46,13 +46,14 @@ export async function getOnboardingProfile(): Promise<OnboardingProfile | null> 
   }
 
   // Handle source_pdfs: can be array of strings or object with keys
+  // Prisma Json type returns JsonValue, so we need to filter to strings
   let source_pdfs: string[] | null = null;
   if (user.source_pdfs) {
     if (Array.isArray(user.source_pdfs)) {
-      source_pdfs = user.source_pdfs;
+      source_pdfs = user.source_pdfs.filter((v): v is string => typeof v === "string");
     } else if (typeof user.source_pdfs === "object") {
       // If it's an object, extract values (URLs)
-      source_pdfs = Object.values(user.source_pdfs).filter(
+      source_pdfs = Object.values(user.source_pdfs as Record<string, unknown>).filter(
         (v): v is string => typeof v === "string"
       );
     }
@@ -141,12 +142,13 @@ export async function getCurrentUserWithProfile(): Promise<UserWithProfile | nul
   }
 
   // Handle source_pdfs: can be array of strings or object with keys
+  // Prisma Json type returns JsonValue, so we need to filter to strings
   let source_pdfs: string[] | null = null;
   if (user.source_pdfs) {
     if (Array.isArray(user.source_pdfs)) {
-      source_pdfs = user.source_pdfs;
+      source_pdfs = user.source_pdfs.filter((v): v is string => typeof v === "string");
     } else if (typeof user.source_pdfs === "object") {
-      source_pdfs = Object.values(user.source_pdfs).filter(
+      source_pdfs = Object.values(user.source_pdfs as Record<string, unknown>).filter(
         (v): v is string => typeof v === "string"
       );
     }

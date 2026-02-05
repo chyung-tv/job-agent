@@ -195,6 +195,47 @@ services:
         --result_backend=redis://redis:6379/0
       "
 
+  # Next.js Frontend
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: job-agent-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
+      retries: 3
+    environment:
+      NODE_ENV: production
+      # Database (limited privilege user)
+      DATABASE_URL: postgresql://job_agent_ui:${POSTGRES_UI_PASSWORD}@postgres:5432/${POSTGRES_DB:-job_agent}
+      # Better Auth
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:3000}
+      NEXT_PUBLIC_BETTER_AUTH_URL: ${NEXT_PUBLIC_BETTER_AUTH_URL:-http://localhost:3000}
+      # Google OAuth
+      BETTER_AUTH_GOOGLE_CLIENT_ID: ${BETTER_AUTH_GOOGLE_CLIENT_ID}
+      BETTER_AUTH_GOOGLE_CLIENT_SECRET: ${BETTER_AUTH_GOOGLE_CLIENT_SECRET}
+      # Backend API
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://api:8000}
+      API_KEY: ${JOB_LAND_API_KEY}
+      # UploadThing
+      UPLOADTHING_TOKEN: ${UPLOADTHING_TOKEN}
+      # Vercel AI SDK (for AI chat in onboarding)
+      GOOGLE_GENERATIVE_AI_API_KEY: ${GOOGLE_GENERATIVE_AI_API_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
+    networks:
+      - job-agent-network
+
   # Caddy - reverse proxy and HTTPS (Caddyfile in repo; no Caddy on host)
   caddy:
     image: caddy:2-alpine
@@ -205,6 +246,8 @@ services:
       - "443:443"
     environment:
       - API_DOMAIN=${API_DOMAIN:-localhost}
+      - FRONTEND_DOMAIN=${FRONTEND_DOMAIN:-}
+      - APEX_DOMAIN=${APEX_DOMAIN:-}
       - FLOWER_DOMAIN=${FLOWER_DOMAIN:-}
       - FLOWER_BASIC_AUTH_USER=${FLOWER_BASIC_AUTH_USER:-}
       - FLOWER_BASIC_AUTH_HASH=${FLOWER_BASIC_AUTH_HASH:-}
@@ -213,6 +256,8 @@ services:
     depends_on:
       api:
         condition: service_started
+      frontend:
+        condition: service_healthy
       flower:
         condition: service_started
     networks:

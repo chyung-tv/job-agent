@@ -17,7 +17,7 @@ import { Suspense, useEffect, useState } from "react";
 function SignUpContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const callbackUrl = searchParams.get("callbackUrl") || "/redirect";
+  const callbackUrl = searchParams.get("callbackUrl") || "/dashboard/overview";
   const [isLoading, setIsLoading] = useState(false);
 
   // Client-side guard: if already authenticated, redirect away from signup
@@ -26,7 +26,7 @@ function SignUpContent() {
       try {
         const session = await authClient.getSession();
         if (session?.data?.user) {
-          router.replace("/redirect");
+          router.replace("/dashboard/overview");
         }
       } catch (error) {
         console.error("Failed to check session on signup page:", error);

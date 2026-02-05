@@ -32,14 +32,14 @@ export default async function ProfilePage() {
     return null;
   }
 
-  // Parse JSON fields
+  // Parse JSON fields - Prisma Json returns JsonValue, so filter to strings
   const suggestedJobTitles = user.suggested_job_titles as string[] | null;
   let sourcePdfs: string[] | null = null;
   if (user.source_pdfs) {
     if (Array.isArray(user.source_pdfs)) {
-      sourcePdfs = user.source_pdfs;
+      sourcePdfs = user.source_pdfs.filter((v): v is string => typeof v === "string");
     } else if (typeof user.source_pdfs === "object") {
-      sourcePdfs = Object.values(user.source_pdfs).filter(
+      sourcePdfs = Object.values(user.source_pdfs as Record<string, unknown>).filter(
         (v): v is string => typeof v === "string"
       );
     }

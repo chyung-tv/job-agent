@@ -6,6 +6,8 @@
 #   ./setup.sh --overwrite        # Reset DB and run migrations (destroys data)
 #   ./setup.sh --migrate          # Run migrations only (alembic upgrade head)
 #   ./setup.sh --two-users        # One-time: add job_agent_admin + job_agent_ui (existing DB)
+#   ./setup.sh --restart          # Stop, rebuild with --no-cache, start fresh
+#   ./setup.sh --rebuild-frontend # Rebuild and restart frontend container only
 #   ./setup.sh --start            # Start stack (docker compose up -d)
 #   ./setup.sh --stop             # Stop stack (docker compose down)
 # Use --dev (default) or --prod with any flag or from menu.
@@ -45,6 +47,28 @@ set_compose() {
   fi
 }
 
+# Grant frontend read permissions on backend tables
+grant_frontend_permissions() {
+  echo "Granting frontend read permissions on backend tables..."
+  if ! cat scripts/grant-frontend-read-permissions.sql | $COMPOSE_BASE exec -T postgres \
+    psql -v ON_ERROR_STOP=1 -U postgres -d "${POSTGRES_DB:-job_agent}" -f -; then
+    echo "Warning: Failed to grant frontend read permissions."
+  fi
+}
+
+# Sync Prisma schema with database (for local development)
+sync_prisma() {
+  if [ -d "frontend" ] && [ -f "frontend/prisma/schema.prisma" ]; then
+    echo "Syncing Prisma schema with database..."
+    if command -v npm &> /dev/null; then
+      (cd frontend && npx prisma db pull && npx prisma generate)
+      echo "Prisma schema synced."
+    else
+      echo "Note: npm not found. Run 'npx prisma db pull && npx prisma generate' in frontend/ manually."
+    fi
+  fi
+}
+
 # -----------------------------------------------------------------------------
 # Actions
 # -----------------------------------------------------------------------------
@@ -60,11 +84,24 @@ action_first_time() {
   fi
   
   echo "=== First-time setup: Complete database initialization ==="
-  echo "1. Starting stack..."
-  $COMPOSE_BASE up -d
   
-  echo "2. Waiting for Postgres to be ready..."
-  sleep 5
+  echo "1. Starting database services (postgres, redis)..."
+  $COMPOSE_BASE up -d postgres redis
+  
+  echo "2. Waiting for Postgres to be healthy..."
+  # Wait for postgres health check to pass (up to 60 seconds)
+  for i in {1..12}; do
+    if $COMPOSE_BASE exec -T postgres pg_isready -U postgres > /dev/null 2>&1; then
+      echo "   Postgres is ready."
+      break
+    fi
+    if [ $i -eq 12 ]; then
+      echo "Error: Postgres did not become ready in time."
+      exit 1
+    fi
+    echo "   Waiting for Postgres... ($i/12)"
+    sleep 5
+  done
   
   echo "3. Dropping existing schema (if any)..."
   $COMPOSE_RUN_API python -m src.database.reset_db
@@ -88,12 +125,24 @@ action_first_time() {
     echo "Warning: Failed to grant Better Auth permissions. You may need to run this manually."
   fi
   
+  echo "7. Granting frontend read permissions on backend tables..."
+  grant_frontend_permissions
+  
+  echo "8. Syncing Prisma schema..."
+  sync_prisma
+  
+  echo "9. Starting all services..."
+  $COMPOSE_BASE up -d --build
+  
   echo "=== Setup complete! ==="
   echo "Stack is up; database initialized with users and permissions."
+  echo "Frontend: http://localhost:3000"
+  echo "Backend:  http://localhost:8000"
 }
 
 action_overwrite() {
   check_env
+  load_env
   set_compose
   echo ""
   echo "*** WARNING: This will DROP the public schema and DESTROY ALL DATA. ***"
@@ -107,21 +156,38 @@ action_overwrite() {
   echo "Resetting database (drop public schema), then running migrations..."
   $COMPOSE_RUN_API python -m src.database.reset_db
   $COMPOSE_RUN_API alembic upgrade head
-  echo "Done. Database reset and at alembic head."
+  
+  echo "Re-granting permissions..."
+  if ! cat scripts/grant-better-auth-permissions.sql | $COMPOSE_BASE exec -T postgres \
+    psql -v ON_ERROR_STOP=1 -U postgres -d "${POSTGRES_DB:-job_agent}" -f -; then
+    echo "Warning: Failed to grant Better Auth permissions."
+  fi
+  grant_frontend_permissions
+  
+  echo "Syncing Prisma schema..."
+  sync_prisma
+  
+  echo "Done. Database reset and at alembic head with permissions granted."
 }
 
 action_migrate() {
   check_env
+  load_env
   set_compose
   echo "Running migrations (alembic upgrade head)..."
   $COMPOSE_RUN_API alembic upgrade head
   
   echo "Granting Better Auth permissions to UI account..."
-  load_env
   if ! cat scripts/grant-better-auth-permissions.sql | $COMPOSE_BASE exec -T postgres \
     psql -v ON_ERROR_STOP=1 -U postgres -d "${POSTGRES_DB:-job_agent}" -f -; then
     echo "Warning: Failed to grant Better Auth permissions."
   fi
+  
+  echo "Granting frontend read permissions..."
+  grant_frontend_permissions
+  
+  echo "Syncing Prisma schema..."
+  sync_prisma
   
   echo "Done. Database at alembic head with permissions granted."
 }
@@ -146,12 +212,48 @@ action_two_users() {
   echo "Done. Two users created and granted. Set POSTGRES_USER=job_agent_admin in .env and use for backend."
 }
 
+action_restart() {
+  check_env
+  set_compose
+  echo "Restarting stack with fresh rebuild (--no-cache)..."
+  $COMPOSE_BASE down
+  $COMPOSE_BASE build --no-cache
+  $COMPOSE_BASE up -d
+  echo "Done. Containers rebuilt without cache and restarted."
+}
+
+action_rebuild_frontend() {
+  check_env
+  set_compose
+  echo "Rebuilding and restarting frontend container..."
+  $COMPOSE_BASE build frontend
+  $COMPOSE_BASE up -d --force-recreate frontend
+  echo "Waiting for frontend health check..."
+  sleep 5
+  # Check health status
+  for i in {1..6}; do
+    STATUS=$($COMPOSE_BASE ps frontend --format '{{.Health}}' 2>/dev/null || echo "unknown")
+    if [ "$STATUS" = "healthy" ]; then
+      echo "Frontend is healthy!"
+      break
+    fi
+    if [ $i -eq 6 ]; then
+      echo "Warning: Frontend health check not yet healthy. Check logs with: docker compose logs frontend"
+    else
+      echo "  Waiting for frontend to be healthy... ($i/6)"
+      sleep 5
+    fi
+  done
+  echo "Done. Frontend rebuilt and restarted."
+  echo "Access at: http://localhost:3000"
+}
+
 action_start() {
   check_env
   set_compose
   echo "Starting stack ($MODE)..."
-  $COMPOSE_BASE up -d
-  echo "Done. API: port 8000 (dev) or via Caddy 80/443 (prod)."
+  $COMPOSE_BASE up -d --build
+  echo "Done. API: port 8000 (dev) or via Caddy 80/443 (prod). Frontend: port 3000."
 }
 
 action_stop() {
@@ -172,28 +274,32 @@ run_menu() {
     echo "--- job-agent setup ---"
     echo "  1) First-time setup     - Start Postgres/Redis + run migrations (new DB)"
     echo "  2) Overwrite DB         - Drop public schema, re-run migrations (DESTROYS DATA)"
-    echo "  3) Run migrations only - alembic upgrade head (apply new migrations)"
+    echo "  3) Run migrations only  - alembic upgrade head (apply new migrations)"
     echo "  4) Add two users        - One-time: create job_agent_admin + job_agent_ui (existing DB)"
-    echo "  5) Start stack         - docker compose up -d"
-    echo "  6) Stop stack          - docker compose down"
-    echo "  7) Toggle dev/prod     - Current: $MODE"
-    echo "  8) Quit"
+    echo "  5) Restart (no-cache)   - Stop, rebuild --no-cache, start (deploy code changes)"
+    echo "  6) Rebuild frontend     - Rebuild and restart frontend container only"
+    echo "  7) Start stack          - docker compose up -d --build"
+    echo "  8) Stop stack           - docker compose down"
+    echo "  9) Toggle dev/prod      - Current: $MODE"
+    echo "  0) Quit"
     echo ""
-    printf "Choice [1-8]: "
+    printf "Choice [0-9]: "
     read -r choice
     case "$choice" in
       1) action_first_time ;;
       2) action_overwrite ;;
       3) action_migrate ;;
       4) action_two_users ;;
-      5) action_start ;;
-      6) action_stop ;;
-      7)
+      5) action_restart ;;
+      6) action_rebuild_frontend ;;
+      7) action_start ;;
+      8) action_stop ;;
+      9)
         if [ "$MODE" = "dev" ]; then MODE="prod"; else MODE="dev"; fi
         set_compose
         echo "Mode set to $MODE."
         ;;
-      8) echo "Bye."; exit 0 ;;
+      0) echo "Bye."; exit 0 ;;
       *) echo "Invalid choice." ;;
     esac
   done
@@ -210,12 +316,14 @@ for arg in "$@"; do
 done
 for arg in "$@"; do
   case "$arg" in
-    --first-time) set_compose; action_first_time; exit 0 ;;
-    --overwrite)  set_compose; action_overwrite;  exit 0 ;;
-    --migrate)    set_compose; action_migrate;   exit 0 ;;
-    --two-users)  set_compose; action_two_users;  exit 0 ;;
-    --start)      set_compose; action_start;     exit 0 ;;
-    --stop)       set_compose; action_stop;      exit 0 ;;
+    --first-time)       set_compose; action_first_time;       exit 0 ;;
+    --overwrite)        set_compose; action_overwrite;        exit 0 ;;
+    --migrate)          set_compose; action_migrate;          exit 0 ;;
+    --two-users)        set_compose; action_two_users;        exit 0 ;;
+    --restart)          set_compose; action_restart;          exit 0 ;;
+    --rebuild-frontend) set_compose; action_rebuild_frontend; exit 0 ;;
+    --start)            set_compose; action_start;            exit 0 ;;
+    --stop)             set_compose; action_stop;             exit 0 ;;
   esac
 done
 

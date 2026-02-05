@@ -41,3 +41,14 @@ services:
       context: .
       dockerfile: Dockerfile
     ports: []
+
+  # Base defines frontend; we override ports (Caddy handles routing) and set production URLs.
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    ports: []  # Caddy handles routing
+    environment:
+      NEXT_PUBLIC_API_URL: https://${API_DOMAIN}
+      BETTER_AUTH_URL: https://${FRONTEND_DOMAIN}
+      NEXT_PUBLIC_BETTER_AUTH_URL: https://${FRONTEND_DOMAIN}

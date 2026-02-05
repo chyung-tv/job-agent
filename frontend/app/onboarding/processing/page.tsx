@@ -81,7 +81,7 @@ function ProcessingContent() {
   const nextUrl = searchParams.get("next") ?? "/onboarding/chat";
 
   const { status, node, message, error_message, isConnected } =
-    useRunStatus(runId, !!runId);
+    useRunStatus(runId, { enabled: !!runId });
 
   const currentStepIndex = useMemo(
     () => getCurrentStepIndex(node, status),

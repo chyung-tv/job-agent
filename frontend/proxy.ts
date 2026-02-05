@@ -1,61 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
 
 /**
- * Next.js proxy for route protection.
+ * Next.js 16 proxy for routing.
  * 
- * Performs optimistic cookie check to protect routes like /dashboard
- * and redirects unauthenticated users to sign-in page.
+ * Per Next.js 16 best practices, proxy.ts is for ROUTING ONLY:
+ * - Rewrites, redirects, headers
+ * - NOT for authentication (that belongs in layout.tsx Server Layout Guards)
  * 
- * This is a lightweight check - no database queries or heavy logic.
+ * Auth is handled by:
+ * - dashboard/layout.tsx - checks session and redirects to /signup if invalid
+ * - signup/page.tsx - client-side check redirects authenticated users
  */
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // IMPORTANT: Skip proxy logic for UploadThing API routes
-  // UploadThing needs to handle its own authentication via middleware
+  // Skip proxy logic for UploadThing API routes
   if (pathname.startsWith("/api/uploadthing")) {
     return NextResponse.next();
   }
 
-  // Read Better Auth session cookie
-  // Better Auth uses underscore in cookie name: better-auth.session_token
-  const sessionCookie = request.cookies.get("better-auth.session_token");
-
-  // Redirect authenticated users away from /signup to dashboard
-  if (pathname.startsWith("/signup") && sessionCookie) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/dashboard/overview";
-    url.searchParams.delete("callbackUrl");
-    return NextResponse.redirect(url);
-  }
-
-  // Redirect authenticated users away from /sign-in to dashboard
-  if (pathname.startsWith("/sign-in") && sessionCookie) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/dashboard/overview";
-    // Clear callbackUrl to avoid loops
-    url.searchParams.delete("callbackUrl");
-    return NextResponse.redirect(url);
-  }
-
-  // Protect /dashboard routes - redirect to signup if no session cookie
-  if (pathname.startsWith("/dashboard") && !sessionCookie) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/signup";
-    url.searchParams.set("callbackUrl", pathname);
-    return NextResponse.redirect(url);
-  }
-
-  // Optionally protect /onboarding if that flow requires authentication
-  // Uncomment if onboarding should be protected:
-  // if (pathname.startsWith("/onboarding") && !sessionCookie) {
-  //   const url = request.nextUrl.clone();
-  //   url.pathname = "/sign-in";
-  //   url.searchParams.set("callbackUrl", pathname);
-  //   return NextResponse.redirect(url);
-  // }
-
-  // Allow all other requests to proceed
+  // All auth logic is handled by layout.tsx (Server Layout Guards)
+  // This prevents redirect loops caused by cookie/session mismatch
   return NextResponse.next();
 }
 

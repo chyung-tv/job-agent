@@ -16,7 +16,7 @@ import { Suspense, useState } from "react";
 
 function SignInContent() {
   const searchParams = useSearchParams();
-  const callbackUrl = searchParams.get("callbackUrl") || "/redirect";
+  const callbackUrl = searchParams.get("callbackUrl") || "/dashboard/overview";
   const [isLoading, setIsLoading] = useState(false);
 
   const handleGoogleSignIn = async () => {
