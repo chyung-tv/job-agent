@@ -56,3 +56,6 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
 )
+
+# Import worker lifecycle module to register Celery signals for event loop management
+import src.tasks.worker_lifecycle  # noqa: F401, E402

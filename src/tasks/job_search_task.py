@@ -1,11 +1,11 @@
 """Celery task for job search workflow."""
 
-import asyncio
 import logging
-import threading
 from typing import Dict, Any
 
 from pydantic_ai.exceptions import ModelHTTPError
+
+from src.tasks.worker_lifecycle import run_in_worker_loop
 
 from src.celery_app import celery_app
 from src.config import LangfuseConfig
@@ -32,104 +32,16 @@ _langfuse_config = LangfuseConfig.from_env()
 
 
 def _is_retryable(exc: BaseException) -> bool:
-    """Return False for client errors and event-loop issues so we don't retry."""
+    """Return False for client errors so we don't retry."""
     if isinstance(exc, ModelHTTPError):
         status = getattr(exc, "status_code", None) or 0
         if 400 <= status < 500:
             return False
-    if isinstance(exc, RuntimeError) and "Event loop is closed" in str(exc):
-        return False
+    # Unwrap cause (e.g. ModelHTTPError wraps google.genai.errors.ClientError)
     cause = getattr(exc, "__cause__", None)
     if cause is not None:
         return _is_retryable(cause)
     return True
-
-
-def run_async(coro):
-    """Run async coroutine from sync context (e.g. Celery task).
-
-    Always runs the coroutine in a **new** thread via asyncio.run() so each
-    run (including retries) gets a fresh event loop. This avoids mixing an
-    existing loop with httpx cleanup and prevents "Event loop is closed" on
-    first run when cleanup runs after the loop is closed.
-
-    When "Event loop is closed" occurs during httpx/httpcore cleanup but we
-    already have the workflow result in result_holder, we treat it as success
-    and return the result so the Celery task succeeds.
-    """
-    result_holder: list = []
-    exc_holder: list = []
-
-    async def wrapper():
-        value = None
-        try:
-            value = await coro
-            return value
-        finally:
-            if value is not None:
-                result_holder.append(value)
-
-    def _run():
-        try:
-            asyncio.run(wrapper())
-        except RuntimeError as e:
-            if "Event loop is closed" in str(e):
-                # Optimistic success: if we already have a result, treat as cleanup-only.
-                if result_holder:
-                    logger.info(
-                        "Event loop closed during cleanup but workflow result "
-                        "already captured; treating as success (result_holder non-empty)"
-                    )
-                    return
-                import traceback
-
-                tb_str = "".join(
-                    traceback.format_exception(type(e), e, e.__traceback__, chain=True)
-                )
-                if e.__cause__ is not None:
-                    tb_str += "".join(
-                        traceback.format_exception(
-                            type(e.__cause__),
-                            e.__cause__,
-                            e.__cause__.__traceback__,
-                        )
-                    )
-                is_cleanup_error = any(
-                    marker in tb_str
-                    for marker in [
-                        "httpcore/_async/connection",
-                        "httpx/_client.py",
-                        "anyio/_backends",
-                        "_close_connections",
-                        "aclose()",
-                        "transport_stream.aclose()",
-                    ]
-                )
-                if is_cleanup_error:
-                    wrapped = RuntimeError(
-                        "Event loop closed during httpx/httpcore connection cleanup. "
-                        "This typically occurs when an async HTTP client tries to "
-                        "close connections after the event loop has already been closed. "
-                        "The underlying workflow may have failed or succeeded, but "
-                        "cleanup failed. Check logs for the actual workflow result."
-                    )
-                    wrapped.__cause__ = e
-                    wrapped.__suppress_context__ = True
-                    exc_holder.append(wrapped)
-                else:
-                    exc_holder.append(e)
-            else:
-                exc_holder.append(e)
-        except BaseException as e:
-            exc_holder.append(e)
-
-    t = threading.Thread(target=_run, name="run_async")
-    t.start()
-    t.join()
-    if exc_holder:
-        raise exc_holder[0]
-    logger.info("run_async returning result (workflow completed successfully)")
-    return result_holder[0]
 
 
 @celery_app.task(bind=True, name="job_search_workflow")
@@ -175,7 +87,7 @@ def execute_job_search_workflow(
 
             logger.info("Executing job search workflow...")
             workflow = JobSearchWorkflow()
-            result = run_async(workflow.run(context))
+            result = run_in_worker_loop(workflow.run(context))
             matches_count = len(result.matched_results) if result.matched_results else 0
             logger.info(
                 "Workflow execution completed. Has errors: %s, Matches found: %s",

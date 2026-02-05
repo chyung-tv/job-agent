@@ -18,26 +18,27 @@ export function proxy(request: NextRequest) {
   }
 
   // Read Better Auth session cookie
-  const sessionCookie = request.cookies.get("better-auth.session-token");
+  // Better Auth uses underscore in cookie name: better-auth.session_token
+  const sessionCookie = request.cookies.get("better-auth.session_token");
 
-  // Redirect authenticated users away from /signup to /redirect
+  // Redirect authenticated users away from /signup to dashboard
   if (pathname.startsWith("/signup") && sessionCookie) {
     const url = request.nextUrl.clone();
-    url.pathname = "/redirect";
+    url.pathname = "/dashboard/overview";
     url.searchParams.delete("callbackUrl");
     return NextResponse.redirect(url);
   }
 
-  // Redirect authenticated users away from /sign-in to /redirect
+  // Redirect authenticated users away from /sign-in to dashboard
   if (pathname.startsWith("/sign-in") && sessionCookie) {
     const url = request.nextUrl.clone();
-    url.pathname = "/redirect";
+    url.pathname = "/dashboard/overview";
     // Clear callbackUrl to avoid loops
     url.searchParams.delete("callbackUrl");
     return NextResponse.redirect(url);
   }
 
-  // Protect /dashboard routes - redirect to sign-in if no session cookie
+  // Protect /dashboard routes - redirect to signup if no session cookie
   if (pathname.startsWith("/dashboard") && !sessionCookie) {
     const url = request.nextUrl.clone();
     url.pathname = "/signup";

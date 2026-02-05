@@ -77,7 +77,7 @@ export type ProfilingWorkflowResponse = z.infer<typeof profilingWorkflowResponse
 export const jobSearchWorkflowRequestSchema = z.object({
   query: z.string().min(1, "Query is required"),
   location: z.string().min(1, "Location is required"),
-  user_id: z.string().uuid("Invalid user ID format").optional(),
+  user_id: z.string().min(1, "User ID is required").optional(),
   num_results: z.number().int().positive().optional(),
   max_screening: z.number().int().positive().optional(),
   google_domain: z.string().optional(),
@@ -114,7 +114,7 @@ export type JobSearchWorkflowResponse = z.infer<typeof jobSearchWorkflowResponse
  * Zod schema for job search from profile request.
  */
 export const jobSearchFromProfileRequestSchema = z.object({
-  user_id: z.string().uuid("Invalid user ID format"),
+  user_id: z.string().min(1, "User ID is required"),
   num_results: z.number().int().positive().optional(),
   max_screening: z.number().int().positive().optional(),
 });
@@ -129,7 +129,7 @@ export type JobSearchFromProfileRequest = z.infer<typeof jobSearchFromProfileReq
  */
 export const jobSearchFromProfileResponseSchema = z.object({
   message: z.string().min(1, "Message is required"),
-  user_id: z.string().uuid("Invalid user ID format"),
+  user_id: z.string().min(1, "User ID is required"),
   location: z.string().min(1, "Location is required"),
   job_titles_count: z.number().int().nonnegative("Job titles count must be non-negative"),
   job_titles: z.array(z.string().min(1, "Job title cannot be empty")),

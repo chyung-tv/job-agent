@@ -34,26 +34,34 @@ export interface UseRunStatusReturn {
   connectionError: Error | null;
 }
 
+export interface UseRunStatusOptions {
+  /** Whether to enable the SSE connection (default: true) */
+  enabled?: boolean;
+  /** Callback when workflow completes or fails */
+  onComplete?: (status: RunStatusType) => void;
+}
+
 /**
  * Hook to stream workflow run status via SSE.
  * 
  * @param runId - UUID of the workflow run to monitor
- * @param enabled - Whether to enable the SSE connection (default: true)
+ * @param options - Hook options including enabled flag and onComplete callback
  * @returns Status state and connection info
  * 
  * @example
  * ```tsx
- * const { status, node, message, isConnected } = useRunStatus(runId);
- * 
- * if (status === "completed") {
- *   // Handle completion
- * }
+ * const { status, node, message, isConnected } = useRunStatus(runId, {
+ *   onComplete: (status) => {
+ *     if (status === "completed") router.refresh();
+ *   }
+ * });
  * ```
  */
 export function useRunStatus(
   runId: string,
-  enabled: boolean = true
+  options: UseRunStatusOptions = {}
 ): UseRunStatusReturn {
+  const { enabled = true, onComplete } = options;
   const [status, setStatus] = useState<RunStatusType | null>(null);
   const [node, setNode] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -64,6 +72,12 @@ export function useRunStatus(
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const previousRunIdRef = useRef<string | null>(null);
+  const onCompleteRef = useRef(onComplete);
+
+  // Keep the callback ref up to date
+  useEffect(() => {
+    onCompleteRef.current = onComplete;
+  }, [onComplete]);
 
   useEffect(() => {
     if (!enabled || !runId) {
@@ -129,6 +143,10 @@ export function useRunStatus(
         ) {
           eventSource.close();
           setIsConnected(false);
+          // Call onComplete callback if provided
+          if (onCompleteRef.current) {
+            onCompleteRef.current(statusEvent.status);
+          }
         }
       } catch (error) {
         console.error("Failed to parse SSE event:", error, event.data);

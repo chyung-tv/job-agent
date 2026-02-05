@@ -80,7 +80,7 @@ def verify_api_key(request: Request) -> None:
 class JobSearchFromProfileRequest(BaseModel):
     """Request model for job search from profile endpoint."""
 
-    user_id: UUID = Field(..., description="UUID of the user")
+    user_id: str = Field(..., description="ID of the user (BetterAuth string ID)")
     num_results: Optional[int] = Field(
         default=DEFAULT_NUM_RESULTS,
         description="Number of job results to fetch per search",
@@ -95,14 +95,14 @@ class JobSearchFromProfileResponse(BaseModel):
     """Response model for job search from profile endpoint."""
 
     message: str
-    user_id: UUID
+    user_id: str
     location: str
     job_titles_count: int
     job_titles: list[str]
 
 
 def send_job_search_completion_email(
-    user_id: UUID,
+    user_id: str,
     job_titles: list[str],
     results: dict,
 ) -> None:
@@ -112,7 +112,7 @@ def send_job_search_completion_email(
     For now, it just logs the completion.
 
     Args:
-        user_id: UUID of the user
+        user_id: ID of the user (BetterAuth string ID)
         job_titles: List of job titles that were searched
         results: Dictionary with search results summary
     """

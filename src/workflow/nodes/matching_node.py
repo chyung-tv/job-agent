@@ -22,6 +22,7 @@ from src.database import (
     MatchedJob,
     JobPosting,
     JobSearch,
+    Run,
 )
 from dotenv import load_dotenv
 
@@ -308,6 +309,17 @@ IMPORTANT:
             job_search.jobs_screened = len(context.all_screening_results)
             job_search.matches_found = len(context.matched_results)
             job_search_repo.update(job_search)
+
+        # Update Run.total_matched_jobs
+        if context.run_id:
+            run_repo = GenericRepository(session, Run)
+            run = run_repo.get(str(context.run_id))
+            if run:
+                run.total_matched_jobs = saved_count
+                run_repo.update(run)
+                self.logger.info(
+                    f"Updated run {context.run_id} with total_matched_jobs={saved_count}"
+                )
 
     async def _execute(
         self, context: JobSearchWorkflowContext

@@ -68,8 +68,12 @@ export default function ChatPage() {
     loadProfileAndQuestions();
   }, [loadProfileAndQuestions]);
 
+  // Determine if we're coming from onboarding flow (store has data) or dashboard (store empty)
+  const isFromOnboarding = cv_files.length > 0;
+
   const handleContinueWithoutChat = () => {
-    router.push("/onboarding/profile");
+    // If coming from dashboard, go back to dashboard profile
+    router.push(isFromOnboarding ? "/onboarding/profile" : "/dashboard/profile");
   };
 
   const handleStartChat = () => {
@@ -109,13 +113,23 @@ export default function ChatPage() {
     };
     const basicInfo = aggregateQAPairs(finalAnswers);
     if (!basicInfo.trim()) {
-      router.push("/onboarding/profile");
+      router.push(isFromOnboarding ? "/onboarding/profile" : "/dashboard/profile");
       return;
     }
-    if (!name || !email || !location || cv_files.length === 0) {
-      setError("Missing onboarding data. Please go back to Review.");
+
+    // Use store data if available, otherwise fall back to profile from DB
+    const userName = name || profile?.name;
+    const userEmail = email || profile?.email;
+    const userLocation = location || profile?.location;
+    const cvUrls = cv_files.length > 0
+      ? cv_files.map((f) => f.url)
+      : profile?.source_pdfs || [];
+
+    if (!userName || !userEmail || !userLocation || cvUrls.length === 0) {
+      setError("Missing profile data. Please complete onboarding first.");
       return;
     }
+
     setLoading("submit");
     setError(null);
     try {
@@ -126,10 +140,10 @@ export default function ChatPage() {
         basicInfo.slice(0, 200)
       );
       const response = await triggerProfiling({
-        name,
-        email,
-        location,
-        cv_urls: cv_files.map((f) => f.url),
+        name: userName,
+        email: userEmail,
+        location: userLocation,
+        cv_urls: cvUrls,
         basic_info: basicInfo,
       });
       console.log(
@@ -138,9 +152,13 @@ export default function ChatPage() {
         "task_id:",
         response.task_id
       );
-      router.push(
-        `/onboarding/processing?run_id=${response.run_id}&next=/onboarding/profile`
-      );
+      
+      // Determine redirect based on source (store has data = onboarding flow)
+      const nextUrl = isFromOnboarding
+        ? `/onboarding/processing?run_id=${response.run_id}&next=/onboarding/profile`
+        : `/onboarding/processing?run_id=${response.run_id}&next=/dashboard/profile`;
+      
+      router.push(nextUrl);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to update profile");
       setLoading("idle");
