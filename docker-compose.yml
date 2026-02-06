@@ -81,6 +81,8 @@ services:
       SENTRY_DSN: ${SENTRY_DSN:-}
       ENVIRONMENT: ${ENVIRONMENT:-development}
       RELEASE_VERSION: ${RELEASE_VERSION:-1.0.0}
+      # API authentication
+      JOB_LAND_API_KEY: ${JOB_LAND_API_KEY:-}
       # Other environment variables
       PYTHONPATH: /app
     volumes:
