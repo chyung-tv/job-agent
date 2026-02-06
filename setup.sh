@@ -103,8 +103,17 @@ action_first_time() {
     sleep 5
   done
   
-  echo "3. Dropping existing schema (if any)..."
-  $COMPOSE_RUN_API python -m src.database.reset_db
+  echo "3. Resetting schema (as postgres superuser)..."
+  # Use postgres superuser directly - works even if job_agent_admin doesn't exist yet
+  # This handles both fresh DBs and dirty volumes from failed previous attempts
+  if ! $COMPOSE_BASE exec -T postgres psql -U postgres -d "${POSTGRES_DB:-job_agent}" -c "
+    DROP SCHEMA IF EXISTS public CASCADE;
+    CREATE SCHEMA public;
+    GRANT ALL ON SCHEMA public TO public;
+  "; then
+    echo "Error: Failed to reset schema. Check if postgres container is running."
+    exit 1
+  fi
   
   echo "4. Creating users (job_agent_admin, job_agent_ui)..."
   ADMIN_ESC="${POSTGRES_PASSWORD//\'/\'\'}"
@@ -272,7 +281,7 @@ run_menu() {
   while true; do
     echo ""
     echo "--- job-agent setup ---"
-    echo "  1) First-time setup     - Start Postgres/Redis + run migrations (new DB)"
+    echo "  1) First-time setup     - Reset schema, create users, run migrations (fresh start)"
     echo "  2) Overwrite DB         - Drop public schema, re-run migrations (DESTROYS DATA)"
     echo "  3) Run migrations only  - alembic upgrade head (apply new migrations)"
     echo "  4) Add two users        - One-time: create job_agent_admin + job_agent_ui (existing DB)"

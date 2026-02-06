@@ -146,25 +146,86 @@ END $$;
 
 ---
 
+## Issue 4: First-Time Setup Chicken-and-Egg Problem
+
+### Symptom
+
+```
+psycopg.OperationalError: connection failed: FATAL: password authentication failed for user "job_agent_admin"
+```
+
+This error occurs at step 3 "Dropping existing schema (if any)" when running `./setup.sh --first-time --prod`.
+
+### Cause
+
+The `action_first_time()` function had a chicken-and-egg ordering problem:
+
+1. **Step 3**: Runs `reset_db.py` which connects as `job_agent_admin`
+2. **Step 4**: Creates users `job_agent_admin` and `job_agent_ui`
+
+The script tried to connect as `job_agent_admin` before that user existed. This fails on:
+- **Fresh databases**: The user doesn't exist yet
+- **Dirty volumes from failed attempts**: The user may not exist or may have wrong password
+
+### Root Cause Analysis
+
+`reset_db.py` runs inside the API container and uses `DATABASE_URL` from environment, which specifies `job_agent_admin` as the connection user. The postgres superuser (`postgres`) always exists, but the application users don't until step 4 creates them.
+
+### Fix Applied
+
+**File:** `setup.sh` - `action_first_time()` function
+
+**Before (broken):**
+```bash
+echo "3. Dropping existing schema (if any)..."
+$COMPOSE_RUN_API python -m src.database.reset_db  # Connects as job_agent_admin - FAILS
+```
+
+**After (works):**
+```bash
+echo "3. Resetting schema (as postgres superuser)..."
+$COMPOSE_BASE exec -T postgres psql -U postgres -d "${POSTGRES_DB:-job_agent}" -c "
+  DROP SCHEMA IF EXISTS public CASCADE;
+  CREATE SCHEMA public;
+  GRANT ALL ON SCHEMA public TO public;
+"
+```
+
+### Why This is Bulletproof
+
+| Scenario | Old Behavior | New Behavior |
+|----------|--------------|--------------|
+| Fresh DB, no volume | Fails (no job_agent_admin) | Works (postgres superuser exists) |
+| Dirty DB from failed attempt | Fails (job_agent_admin may not exist) | Works (resets as superuser first) |
+| Existing DB with correct users | Works | Works (reset then recreate) |
+
+### Key Insight
+
+The `postgres` superuser is created automatically by the postgres Docker image and always exists. By using `psql` directly in the postgres container instead of going through the API container, we avoid the dependency on application users.
+
+**Status:** Fix applied.
+
+---
+
 ## Summary of Modified Files
 
 | File | Change | Status |
 |------|--------|--------|
-| `scripts/grant-two-users-existing-db.sql` | Use `set_config`/`current_setting` for psql vars | Applied |
-| `setup.sh` | Changed alembic invocation to `python -c` one-liner | Applied |
-| `Dockerfile.frontend` | Added `mkdir -p ./public` before COPY | Applied |
+| `scripts/grant-two-users-existing-db.sql` | Use `set_config`/`current_setting` for psql vars; fixed `set_config(..., false)` for session-level persistence | Applied |
+| `setup.sh` | Replaced `reset_db.py` with direct psql as postgres superuser; fixed step ordering | Applied |
+| `src/database/run_migrations.py` | NEW: Robust Alembic migration runner using programmatic API | Applied |
+| `frontend/public/.gitkeep` | NEW: Ensures public directory exists for Docker build | Applied |
 
 ## Deployment Sequence
 
 Once all fixes are committed and pushed to VPS:
 
 ```bash
-# 1. Force rebuild all images
+# For fresh setup (or to reset everything):
+./setup.sh --first-time --prod
+
+# OR for existing DB that just needs code updates:
 ./setup.sh --restart --prod
-
-# 2. If restart succeeds, run migrations
-./setup.sh --migrate --prod
-
-# 3. Start services
-./setup.sh --start --prod
 ```
+
+The `--first-time` flag now handles all scenarios (fresh DB, dirty volume, existing users) by using postgres superuser for schema reset before creating application users.
