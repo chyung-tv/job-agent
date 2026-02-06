@@ -279,6 +279,8 @@ export const auth = betterAuth({
 | **Postgres host port** | Production binds to `127.0.0.1:5433` (not 5432) to avoid conflicts |
 | **Volume permissions** | Postgres init scripts only run on empty volume |
 | **Container restart** | Use `restart: unless-stopped` for all services |
+| **Multi-stage build cache** | `docker compose run` may use stale cached images; use `--no-cache` for first-time setup |
+| **Verify packages in Dockerfile** | Add `RUN python -c "import pkg; print('OK')"` after install to fail fast if packages missing |
 
 ### 3.2 Database
 
@@ -389,6 +391,43 @@ SSE connections for real-time status were being dropped silently. The fix requir
 
 ---
 
+### Lesson 4: Multi-Stage Docker Builds and Stale Caches
+
+> **Always verify critical packages at build time and force fresh builds for first-time setup.**
+
+Multi-stage Docker builds copy packages from builder to runtime stage. If the image is cached from before a dependency was added, `docker compose run` silently reuses the stale image, causing `ModuleNotFoundError` at runtime.
+
+**Problem scenario:**
+1. VPS has cached Docker image from before `alembic` was added to `pyproject.toml`
+2. `docker compose run --rm api python -m src.database.run_migrations` reuses cached image
+3. Runtime fails with `ModuleNotFoundError: No module named 'alembic.config'`
+4. Locally it works because the dev image was recently rebuilt
+
+**Solution:**
+1. **Add verification in Dockerfile** (builder stage):
+   ```dockerfile
+   RUN python -c "from alembic.config import Config; print('alembic OK')" && \
+       python -c "import celery; print('celery OK')" && \
+       python -c "import fastapi; print('fastapi OK')"
+   ```
+   This makes the build fail immediately if packages are missing.
+
+2. **Force `--no-cache` in first-time setup**:
+   ```bash
+   $COMPOSE_BASE build --no-cache api
+   ```
+   This ensures no stale layers are reused.
+
+**Key insight:** The failure mode is silent — `docker compose run` doesn't rebuild if an image exists. You only discover the problem at runtime. Build-time verification catches it early.
+
+**Files affected:**
+- `Dockerfile` (verification step)
+- `setup.sh` (--no-cache build before migrations)
+
+**Impact:** Without this, production deployments would fail mysteriously after adding new dependencies.
+
+---
+
 ## Appendix: Quick Reference Commands
 
 ```bash
@@ -416,5 +455,5 @@ uv run pytest test/ -v
 
 ---
 
-*Last updated: 2026-02-06*
+*Last updated: 2026-02-06 (Added Lesson 4: Multi-Stage Docker Builds)*
 *Maintained by: Development Team*

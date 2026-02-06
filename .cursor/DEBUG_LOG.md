@@ -1,7 +1,19 @@
 # Debug Log: Production Deployment Issues
 
 **Created:** 2026-02-06
-**Status:** In Progress
+**Status:** RESOLVED (2026-02-06)
+
+---
+
+## Takeaways
+
+| Issue | Root Cause | Fix | Lesson Learned |
+|-------|------------|-----|----------------|
+| **Issue 1-5: Alembic missing** | Stale cached Docker image on VPS from before alembic was added to dependencies | Force `--no-cache` build + add verification step in Dockerfile | Multi-stage Docker builds can silently fail if images are cached; always verify critical packages at build time |
+| **Issue 2: Frontend build** | Missing `public/` directory in source | Add `frontend/public/.gitkeep` | Multi-stage COPY fails silently if source doesn't exist; ensure all expected directories exist |
+| **Issue 3: psql vars** | psql cannot interpolate variables inside `DO $$ ... $$` blocks | Use `set_config()` / `current_setting()` pattern | Use session config for passing variables into PL/pgSQL blocks |
+| **Issue 4: Chicken-and-egg** | Script tried to connect as application user before creating it | Use postgres superuser for schema reset, create users after | First-time setup must use always-available superuser for bootstrap |
+| **Issue 6: NEXT_PUBLIC_* vars** | Runtime env vars don't work for Next.js client-side code; they're inlined at build time | Pass as Docker build args (ARG/ENV), not runtime environment | NEVER use runtime env for `NEXT_PUBLIC_*` in Docker; must be available at `npm run build` |
 
 ---
 
@@ -109,7 +121,7 @@ RUN mkdir -p ./public
 COPY --from=builder /app/public ./public
 ```
 
-**Status:** Fix applied, needs testing on VPS.
+**Status:** RESOLVED - Verified on VPS 2026-02-06.
 
 ---
 
@@ -142,7 +154,7 @@ BEGIN
 END $$;
 ```
 
-**Status:** Fix applied, needs testing.
+**Status:** RESOLVED - Verified on VPS 2026-02-06.
 
 ---
 
@@ -203,7 +215,7 @@ $COMPOSE_BASE exec -T postgres psql -U postgres -d "${POSTGRES_DB:-job_agent}" -
 
 The `postgres` superuser is created automatically by the postgres Docker image and always exists. By using `psql` directly in the postgres container instead of going through the API container, we avoid the dependency on application users.
 
-**Status:** Fix applied.
+**Status:** RESOLVED - Verified on VPS 2026-02-06.
 
 ---
 
@@ -211,11 +223,11 @@ The `postgres` superuser is created automatically by the postgres Docker image a
 
 | File | Change | Status |
 |------|--------|--------|
-| `scripts/grant-two-users-existing-db.sql` | Use `set_config`/`current_setting` for psql vars; fixed `set_config(..., false)` for session-level persistence | Applied |
-| `setup.sh` | Replaced `reset_db.py` with direct psql as postgres superuser; fixed step ordering; added `--no-cache` API build before migrations (Issue 5) | Applied |
-| `src/database/run_migrations.py` | NEW: Robust Alembic migration runner using programmatic API | Applied |
-| `frontend/public/.gitkeep` | NEW: Ensures public directory exists for Docker build | Applied |
-| `Dockerfile` | Added verification step after `uv pip install` to fail fast if alembic/celery/fastapi missing (Issue 5) | Applied |
+| `scripts/grant-two-users-existing-db.sql` | Use `set_config`/`current_setting` for psql vars; fixed `set_config(..., false)` for session-level persistence | Tested |
+| `setup.sh` | Replaced `reset_db.py` with direct psql as postgres superuser; fixed step ordering; added `--no-cache` API build before migrations (Issue 5) | Tested |
+| `src/database/run_migrations.py` | NEW: Robust Alembic migration runner using programmatic API | Tested |
+| `frontend/public/.gitkeep` | NEW: Ensures public directory exists for Docker build | Tested |
+| `Dockerfile` | Added verification step after `uv pip install` to fail fast if alembic/celery/fastapi missing (Issue 5) | Tested |
 
 ## Deployment Sequence
 
@@ -330,4 +342,112 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm api \
 ./setup.sh --first-time --prod
 ```
 
-**Status:** Fix applied, needs testing on VPS.
+**Status:** RESOLVED - Verified on VPS 2026-02-06. First-time setup completed successfully with all migrations applied.
+
+---
+
+## Issue 6: NEXT_PUBLIC_* Variables Not Available in Production Frontend
+
+### Symptom
+
+Browser console on `https://app.profilescreens.com` shows CORS errors:
+
+```
+Access to fetch at 'http://localhost:3000/api/auth/get-session' from origin 'https://app.profilescreens.com' 
+has been blocked by CORS policy: Permission was denied for this request to access the `loopback` address space.
+
+Failed to check session on signup page: TypeError: Failed to fetch
+
+Access to fetch at 'http://localhost:3000/api/auth/sign-in/social' from origin 'https://app.profilescreens.com' 
+has been blocked by CORS policy: Response to preflight request doesn't pass access control check
+```
+
+The frontend is calling `http://localhost:3000` instead of `https://app.profilescreens.com` for auth endpoints.
+
+### Root Cause
+
+**Next.js `NEXT_PUBLIC_*` environment variables are inlined into the JavaScript bundle at BUILD TIME, not read at runtime.**
+
+The `docker-compose.prod.yml` was setting these variables as runtime environment variables:
+
+```yaml
+frontend:
+  environment:
+    NEXT_PUBLIC_BETTER_AUTH_URL: https://${FRONTEND_DOMAIN}
+    NEXT_PUBLIC_API_URL: https://${API_DOMAIN}
+```
+
+But the `Dockerfile.frontend` built the image without these variables, so the default fallback values (`http://localhost:3000`) were baked into the JavaScript bundle.
+
+**How Next.js handles NEXT_PUBLIC_* variables:**
+
+| Variable Type | Available When | How It Works |
+|---------------|----------------|--------------|
+| `NEXT_PUBLIC_*` | Build time | Text-replaced into JS bundle during `npm run build` |
+| Server-only env | Runtime | Read via `process.env` in server components/API routes |
+
+### Fix Applied
+
+**File:** `Dockerfile.frontend` - Added ARG/ENV declarations for build-time variables:
+
+```dockerfile
+# Build stage
+FROM node:22-alpine AS builder
+WORKDIR /app
+
+# Build arguments for NEXT_PUBLIC_* vars (must be available at build time)
+ARG NEXT_PUBLIC_BETTER_AUTH_URL=http://localhost:3000
+ARG NEXT_PUBLIC_API_URL=http://localhost:8000
+
+# Set as environment variables for the build
+ENV NEXT_PUBLIC_BETTER_AUTH_URL=$NEXT_PUBLIC_BETTER_AUTH_URL
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+```
+
+**File:** `docker-compose.prod.yml` - Changed from runtime env to build args:
+
+```yaml
+frontend:
+  build:
+    context: .
+    dockerfile: Dockerfile.frontend
+    args:
+      NEXT_PUBLIC_BETTER_AUTH_URL: https://${FRONTEND_DOMAIN}
+      NEXT_PUBLIC_API_URL: https://${API_DOMAIN}
+  environment:
+    # Only server-side env vars here (work at runtime)
+    BETTER_AUTH_URL: https://${FRONTEND_DOMAIN}
+```
+
+**File:** `setup.sh` - Added `--no-cache` to `action_rebuild_frontend()`:
+
+```bash
+# Before:
+$COMPOSE_BASE build frontend
+
+# After:
+$COMPOSE_BASE build --no-cache frontend
+```
+
+This ensures the "rebuild" action actually rebuilds from scratch, picking up Dockerfile changes.
+
+### Verification
+
+After rebuilding, verify the embedded URLs:
+
+```bash
+# Rebuild frontend with new build args
+./setup.sh --rebuild-frontend --prod
+
+# Verify no localhost references in built JS (inside container)
+docker compose -f docker-compose.yml -f docker-compose.prod.yml exec frontend \
+  sh -c "grep -r 'localhost:3000' .next/static/ || echo 'No localhost references found (good)'"
+```
+
+Then check browser console on `https://app.profilescreens.com` - auth requests should go to `https://app.profilescreens.com/api/auth/...` instead of localhost.
+
+### Key Insight
+
+**NEVER rely on runtime environment variables for `NEXT_PUBLIC_*` in Docker builds.** These must be passed as build arguments (ARG) and set as ENV before `npm run build`.
+
+**Status:** RESOLVED - 2026-02-06

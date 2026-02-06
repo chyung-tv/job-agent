@@ -242,8 +242,8 @@ action_restart() {
 action_rebuild_frontend() {
   check_env
   set_compose
-  echo "Rebuilding and restarting frontend container..."
-  $COMPOSE_BASE build frontend
+  echo "Rebuilding and restarting frontend container (--no-cache)..."
+  $COMPOSE_BASE build --no-cache frontend
   $COMPOSE_BASE up -d --force-recreate frontend
   echo "Waiting for frontend health check..."
   sleep 5
