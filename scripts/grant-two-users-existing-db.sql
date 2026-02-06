@@ -6,18 +6,25 @@
 \set ON_ERROR_STOP on
 
 -- Create roles if they don't exist, or alter password if they do
+-- Set session variables for the DO block to access
+SELECT set_config('var.admin_pass', :'admin_pass', true);
+SELECT set_config('var.ui_pass', :'ui_pass', true);
+
 DO $$
+DECLARE
+  v_admin_pass text := current_setting('var.admin_pass');
+  v_ui_pass text := current_setting('var.ui_pass');
 BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'job_agent_admin') THEN
-    EXECUTE format('CREATE ROLE job_agent_admin WITH LOGIN PASSWORD %L', :'admin_pass');
+    EXECUTE format('CREATE ROLE job_agent_admin WITH LOGIN PASSWORD %L', v_admin_pass);
   ELSE
-    EXECUTE format('ALTER ROLE job_agent_admin WITH PASSWORD %L', :'admin_pass');
+    EXECUTE format('ALTER ROLE job_agent_admin WITH PASSWORD %L', v_admin_pass);
   END IF;
   
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'job_agent_ui') THEN
-    EXECUTE format('CREATE ROLE job_agent_ui WITH LOGIN PASSWORD %L', :'ui_pass');
+    EXECUTE format('CREATE ROLE job_agent_ui WITH LOGIN PASSWORD %L', v_ui_pass);
   ELSE
-    EXECUTE format('ALTER ROLE job_agent_ui WITH PASSWORD %L', :'ui_pass');
+    EXECUTE format('ALTER ROLE job_agent_ui WITH PASSWORD %L', v_ui_pass);
   END IF;
 END $$;
 
