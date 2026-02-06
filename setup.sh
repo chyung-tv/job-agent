@@ -117,7 +117,7 @@ action_first_time() {
   fi
   
   echo "5. Running migrations (creating tables)..."
-  $COMPOSE_RUN_API python -c "import alembic.config; alembic.config.main(argv=['upgrade', 'head'])"
+  $COMPOSE_RUN_API python -c "from alembic.config import main; main(argv=['upgrade', 'head'])"
   
   echo "6. Granting Better Auth permissions to UI account..."
   if ! cat scripts/grant-better-auth-permissions.sql | $COMPOSE_BASE exec -T postgres \
@@ -155,7 +155,7 @@ action_overwrite() {
   fi
   echo "Resetting database (drop public schema), then running migrations..."
   $COMPOSE_RUN_API python -m src.database.reset_db
-  $COMPOSE_RUN_API python -c "import alembic.config; alembic.config.main(argv=['upgrade', 'head'])"
+  $COMPOSE_RUN_API python -c "from alembic.config import main; main(argv=['upgrade', 'head'])"
   
   echo "Re-granting permissions..."
   if ! cat scripts/grant-better-auth-permissions.sql | $COMPOSE_BASE exec -T postgres \
@@ -175,7 +175,7 @@ action_migrate() {
   load_env
   set_compose
   echo "Running migrations (alembic upgrade head)..."
-  $COMPOSE_RUN_API python -c "import alembic.config; alembic.config.main(argv=['upgrade', 'head'])"
+  $COMPOSE_RUN_API python -c "from alembic.config import main; main(argv=['upgrade', 'head'])"
   
   echo "Granting Better Auth permissions to UI account..."
   if ! cat scripts/grant-better-auth-permissions.sql | $COMPOSE_BASE exec -T postgres \
