@@ -1,0 +1,892 @@
+---
+description: Backend patterns for FastAPI, Celery, SQLAlchemy, and Agent Workflow architecture
+globs: src/**/*
+alwaysApply: false
+---
+
+# Backend Development Patterns
+
+This rule enforces the established patterns for the Job Agent backend application.
+
+## Tech Stack
+
+- **API Framework**: FastAPI with Pydantic models
+- **Task Queue**: Celery with Redis broker/backend
+- **Database**: PostgreSQL with SQLAlchemy ORM (psycopg3)
+- **AI Agents**: pydantic-ai with Google Gemini models
+- **Observability**: Langfuse for tracing
+- **Real-time**: Redis Pub/Sub for SSE status streaming
+
+## Project Structure
+
+```
+src/
+├── api/
+│   └── api.py              # FastAPI endpoints
+├── celery_app.py           # Celery configuration
+├── config.py               # Centralized constants and configuration
+├── langfuse_utils.py       # Observability utilities
+├── database/
+│   ├── __init__.py         # Exports: db_session, models, repository
+│   ├── models.py           # SQLAlchemy models
+│   ├── repository.py       # GenericRepository + context helpers
+│   └── session.py          # Engine, SessionLocal, Base
+├── tasks/
+│   ├── job_search_task.py  # Celery task definitions
+│   ├── profiling_task.py
+│   ├── utils.py            # update_run_status helper
+│   └── worker_lifecycle.py # Async event loop management
+├── workflow/
+│   ├── base_context.py     # BaseContext + workflow contexts
+│   ├── base_node.py        # BaseNode abstract class
+│   ├── base_workflow.py    # BaseWorkflow orchestrator
+│   ├── job_search_workflow.py
+│   ├── profiling_workflow.py
+│   ├── status_publisher.py # Redis pub/sub for SSE
+│   └── nodes/              # Individual workflow nodes
+│       ├── discovery_node.py
+│       ├── matching_node.py
+│       └── ...
+├── discovery/              # SerpAPI job search
+├── matcher/                # AI job screening agent
+├── research/               # Company research agent
+├── fabrication/            # CV/cover letter generation
+├── delivery/               # Email delivery (Nylas)
+└── profiling/              # PDF parsing and profile extraction
+```
+
+## Workflow Architecture Pattern
+
+The backend uses a **Node-based Workflow Pattern** with:
+
+1. **Context Object**: Carries all state through the workflow pipeline
+2. **Nodes**: Individual processing units that transform context
+3. **Workflow Orchestrator**: Executes nodes in sequence with error handling
+
+### BaseContext Pattern
+
+All workflow contexts extend `BaseContext`:
+
+```python
+from typing import Optional, List
+from datetime import datetime
+from uuid import UUID
+from pydantic import BaseModel, Field
+
+class BaseContext(BaseModel):
+    """Base context class for all workflows."""
+
+    run_id: Optional[UUID] = None
+    errors: List[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    def add_error(self, error: str) -> None:
+        """Add an error message to the context."""
+        self.errors.append(error)
+
+    def has_errors(self) -> bool:
+        """Check if context has any errors."""
+        return len(self.errors) > 0
+
+    def validate(self) -> bool:
+        """Base validation method. Override in subclasses."""
+        return True
+```
+
+### Workflow-Specific Context
+
+Define workflow-specific context extending `BaseContext`:
+
+```python
+class JobSearchWorkflowContext(BaseContext):
+    """Context for job search workflow."""
+
+    # ========== Input Parameters ==========
+    query: str
+    location: str
+    user_id: Optional[Union[UUID, str]] = None
+    num_results: int = DEFAULT_NUM_RESULTS
+
+    # ========== Step Output ==========
+    jobs: List[JobResult] = Field(default_factory=list)
+    job_search_id: Optional[UUID] = None
+    matched_results: List[JobScreeningOutput] = Field(default_factory=list)
+
+    def get_summary(self) -> dict:
+        """Get a summary of the workflow state."""
+        return {
+            "query": self.query,
+            "location": self.location,
+            "jobs_found": len(self.jobs),
+            "matches_found": len(self.matched_results),
+            "has_errors": self.has_errors(),
+        }
+
+    def validate(self) -> bool:
+        """Validate required fields."""
+        if not self.query or not self.query.strip():
+            self.add_error("Query is required")
+            return False
+        return True
+```
+
+### BaseNode Pattern
+
+All nodes extend `BaseNode` with async `_execute`:
+
+```python
+from abc import ABC, abstractmethod
+import logging
+from src.langfuse_utils import observe
+
+class BaseNode(ABC):
+    """Base class for all workflow nodes."""
+
+    def __init__(self):
+        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+
+    @observe()
+    async def run(self, context: "BaseContext") -> "BaseContext":
+        """Traced entry point; delegates to _execute()."""
+        # Langfuse tracing context setup...
+        return await self._execute(context)
+
+    @abstractmethod
+    async def _execute(self, context: "BaseContext") -> "BaseContext":
+        """Node-specific logic. Subclasses implement this."""
+        pass
+
+    def _get_db_session(self):
+        """Helper to create database session."""
+        from src.database import db_session
+        return db_session()
+
+    def _validate_context(self, context: "BaseContext") -> bool:
+        """Validate required context fields before execution."""
+        return True
+
+    def _load_data(self, context: "BaseContext", session) -> None:
+        """Load heavy data from database based on context identifiers."""
+        pass
+
+    def _persist_data(self, context: "BaseContext", session) -> None:
+        """Persist results to database."""
+        pass
+```
+
+### Concrete Node Implementation
+
+```python
+class DiscoveryNode(BaseNode):
+    """Node for discovering jobs using SerpAPI."""
+
+    def __init__(self, api_key: Optional[str] = None):
+        super().__init__()
+        self.api_key = api_key or os.getenv("SERPAPI_KEY")
+        if not self.api_key:
+            raise ValueError("SerpAPI API key is required")
+
+    def _validate_context(self, context: JobSearchWorkflowContext) -> bool:
+        if not context.query or not context.query.strip():
+            context.add_error("Query is required for discovery step")
+            return False
+        return True
+
+    def _persist_data(self, context: JobSearchWorkflowContext, session) -> None:
+        """Save job search results to database."""
+        # Create JobSearch and JobPosting records...
+        pass
+
+    async def _execute(self, context: JobSearchWorkflowContext) -> JobSearchWorkflowContext:
+        """Discover jobs using SerpAPI."""
+        self.logger.info("Starting discovery node")
+
+        # 1. Validate context
+        if not self._validate_context(context):
+            return context
+
+        # 2. Load existing data if needed
+        session_gen = self._get_db_session()
+        session = next(session_gen)
+        try:
+            self._load_data(context, session)
+        finally:
+            try:
+                next(session_gen, None)
+            except StopIteration:
+                pass
+
+        # 3. Perform node-specific logic
+        # ... API calls, processing ...
+        context.jobs = all_jobs
+
+        # 4. Persist results
+        session_gen = self._get_db_session()
+        session = next(session_gen)
+        try:
+            self._persist_data(context, session)
+        except Exception as e:
+            context.add_error(f"Failed to save to database: {e}")
+        finally:
+            try:
+                next(session_gen, None)
+            except StopIteration:
+                pass
+
+        self.logger.info("Discovery node completed")
+        return context
+```
+
+### BaseWorkflow Pattern
+
+```python
+from abc import ABC, abstractmethod
+from src.workflow.base_node import BaseNode
+from src.workflow.status_publisher import publish_run_status
+
+class BaseWorkflow(ABC):
+    """Base class for all workflows."""
+
+    def __init__(self, workflow_type: str = "generic"):
+        self.workflow_type = workflow_type
+        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+        self.execution_history: List[ExecutionRecord] = []
+
+    def _create_run(self, context: "BaseContext") -> uuid.UUID:
+        """Create a new run record in the database."""
+        session_gen = db_session()
+        session = next(session_gen)
+        try:
+            run = Run(status="processing", user_id=str(context.user_id) if context.user_id else None)
+            session.add(run)
+            session.commit()
+            session.refresh(run)
+            context.run_id = run.id
+            return run.id
+        finally:
+            try:
+                next(session_gen, None)
+            except StopIteration:
+                pass
+
+    async def _execute_node(self, node: BaseNode, context: "BaseContext") -> "BaseContext":
+        """Execute a single node with error handling and tracking."""
+        node_name = node.__class__.__name__
+        self.logger.info(f"Executing node: {node_name}")
+
+        # Publish status for real-time UI updates
+        if context.run_id:
+            publish_run_status(str(context.run_id), "processing", node=node_name)
+
+        try:
+            context = await node.run(context)
+            self.execution_history.append(ExecutionRecord(node_name, datetime.utcnow(), True))
+            return context
+        except Exception as e:
+            context.add_error(f"Node {node_name} failed: {e}")
+            self.execution_history.append(ExecutionRecord(node_name, datetime.utcnow(), False, str(e)))
+            raise
+
+    @observe()
+    async def run(self, context: "BaseContext") -> "BaseContext":
+        """Execute the workflow with tracing."""
+        if not context.run_id:
+            self._create_run(context)
+        return await self._execute(context)
+
+    @abstractmethod
+    async def _execute(self, context: "BaseContext") -> "BaseContext":
+        """Execute workflow-specific logic. Subclasses implement this."""
+        pass
+```
+
+### Concrete Workflow Implementation
+
+```python
+class JobSearchWorkflow(BaseWorkflow):
+    """Workflow orchestrator for job search pipeline."""
+
+    class Context(JobSearchWorkflowContext):
+        """Workflow-specific context."""
+        pass
+
+    def __init__(self):
+        super().__init__(workflow_type="job_search")
+        self.discovery_node = DiscoveryNode()
+        self.matching_node = MatchingNode()
+        self.research_node = ResearchNode()
+        self.fabrication_node = FabricationNode()
+
+    async def _execute(self, context: Context) -> Context:
+        """Execute the job search node flow."""
+        self.logger.info("Starting job search workflow")
+
+        # Step 1: Discovery - Find jobs
+        context = await self._execute_node(self.discovery_node, context)
+        if context.has_errors():
+            return context
+
+        # Step 2: Matching - Match jobs against profile
+        context = await self._execute_node(self.matching_node, context)
+        if context.has_errors():
+            return context
+
+        # Early exit if no matches
+        if not context.matched_results:
+            self.logger.info("No matches found, skipping research")
+            return context
+
+        # Step 3: Research + Fabrication
+        context = await self._execute_node(self.research_node, context)
+        context = await self._execute_node(self.fabrication_node, context)
+
+        self.logger.info("Workflow completed. Path: %s", " -> ".join(self.get_execution_path()))
+        return context
+```
+
+## FastAPI Patterns
+
+### Endpoint Structure
+
+```python
+from http import HTTPStatus
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+
+app = FastAPI(title="Job Agent API", version="1.0.0")
+
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",")],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+)
+```
+
+### API Key Authentication
+
+```python
+from src.config import get_api_key
+
+def verify_api_key(request: Request) -> None:
+    """Validate API key from X-API-Key or Authorization: Bearer."""
+    expected = get_api_key()
+    if not expected:
+        raise HTTPException(status_code=HTTPStatus.UNAUTHORIZED, detail="API key not configured")
+
+    auth_header = request.headers.get("Authorization")
+    api_key_header = request.headers.get("X-API-Key")
+    provided = api_key_header
+    if not provided and auth_header and auth_header.lower().startswith("bearer "):
+        provided = auth_header[7:].strip()
+
+    if not provided or provided != expected:
+        raise HTTPException(status_code=HTTPStatus.UNAUTHORIZED, detail="API key missing or invalid")
+```
+
+### Async Endpoint Pattern (Celery)
+
+Endpoints return `202 Accepted` immediately and enqueue Celery tasks:
+
+```python
+@app.post("/workflow/job-search", status_code=HTTPStatus.ACCEPTED)
+async def run_job_search_workflow(
+    context: JobSearchWorkflow.Context,
+    _: None = Depends(verify_api_key),
+):
+    """Run the job search workflow asynchronously using Celery."""
+    session_gen = db_session()
+    session = next(session_gen)
+    try:
+        # Create Run record
+        run = Run(status="pending", user_id=str(context.user_id) if context.user_id else None)
+        session.add(run)
+        session.commit()
+        session.refresh(run)
+        context.run_id = run.id
+
+        # Enqueue Celery task
+        task = execute_job_search_workflow.delay(
+            context_data=context.model_dump(mode="json"),
+            run_id=str(run.id),
+        )
+
+        # Store task_id on run
+        run.task_id = task.id
+        session.commit()
+
+        return JSONResponse(
+            status_code=HTTPStatus.ACCEPTED,
+            content={
+                "run_id": str(run.id),
+                "task_id": task.id,
+                "status": "pending",
+                "status_url": f"/workflow/status/{run.id}",
+            },
+        )
+    finally:
+        try:
+            next(session_gen, None)
+        except StopIteration:
+            pass
+```
+
+### SSE Streaming Endpoint
+
+```python
+from redis.asyncio import Redis
+from fastapi.responses import StreamingResponse
+
+SSE_HEARTBEAT_INTERVAL_SEC = 15
+
+async def _sse_run_status_stream(run_id: UUID) -> AsyncGenerator[str, None]:
+    """Subscribe to Redis and yield SSE events."""
+    channel = f"run:status:{run_id}"
+    client = Redis.from_url(get_redis_url())
+    pubsub = client.pubsub()
+    try:
+        await pubsub.subscribe(channel)
+        while True:
+            message = await pubsub.get_message(
+                ignore_subscribe_messages=True,
+                timeout=SSE_HEARTBEAT_INTERVAL_SEC,
+            )
+            if message is None:
+                yield ": keep-alive\n\n"
+            elif message.get("type") == "message" and message.get("data"):
+                data = message["data"].decode("utf-8") if isinstance(message["data"], bytes) else message["data"]
+                yield f"data: {data}\n\n"
+    finally:
+        await pubsub.unsubscribe(channel)
+        await client.aclose()
+
+@app.get("/workflow/status/{run_id}/stream")
+async def stream_run_status(run_id: UUID, _: None = Depends(verify_api_key)):
+    """Stream run status via SSE."""
+    return StreamingResponse(
+        _sse_run_status_stream(run_id),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )
+```
+
+## Celery Task Patterns
+
+### Celery App Configuration
+
+```python
+from celery import Celery
+
+BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
+RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", BROKER_URL)
+
+celery_app = Celery(
+    "job_agent",
+    broker=BROKER_URL,
+    backend=RESULT_BACKEND,
+    include=[
+        "src.tasks.profiling_task",
+        "src.tasks.job_search_task",
+    ],
+)
+
+celery_app.conf.update(
+    task_serializer="json",
+    accept_content=["json"],
+    result_serializer="json",
+    timezone="UTC",
+    enable_utc=True,
+)
+
+# Import worker lifecycle for async support
+import src.tasks.worker_lifecycle  # noqa: F401
+```
+
+### Celery Task with Async Workflow
+
+```python
+from src.celery_app import celery_app
+from src.tasks.worker_lifecycle import run_in_worker_loop
+from src.tasks.utils import update_run_status
+from src.langfuse_utils import observe, create_workflow_trace_context, propagate_attributes
+
+@celery_app.task(bind=True, name="job_search_workflow")
+@observe()
+def execute_job_search_workflow(self, context_data: Dict[str, Any], run_id: str = None) -> Dict[str, Any]:
+    """Execute job search workflow as Celery task."""
+    logger.info("Starting job search workflow task (run_id: %s)", run_id)
+
+    trace_context = create_workflow_trace_context(
+        run_id=run_id,
+        workflow_type="job_search",
+        metadata={"celery_task_id": self.request.id},
+    )
+
+    with propagate_attributes(**trace_context):
+        try:
+            if run_id:
+                update_run_status(run_id, "processing")
+
+            context = JobSearchWorkflowContext(**context_data)
+            workflow = JobSearchWorkflow()
+
+            # CRITICAL: Use run_in_worker_loop for async code in Celery
+            result = run_in_worker_loop(workflow.run(context))
+
+            final_status = "failed" if result.has_errors() else "completed"
+            if run_id:
+                update_run_status(run_id, final_status, error_message="; ".join(result.errors) if result.has_errors() else None)
+
+            return result.model_dump(mode="json")
+
+        except Exception as exc:
+            logger.error("Workflow failed: %s", exc, exc_info=True)
+            if run_id:
+                update_run_status(run_id, "failed", error_message=str(exc))
+            raise self.retry(exc=exc, countdown=60, max_retries=3)
+```
+
+### Worker Lifecycle (Async Event Loop)
+
+**CRITICAL**: Celery workers need a long-lived event loop for async code (pydantic-ai, httpx):
+
+```python
+import asyncio
+import threading
+from celery.signals import worker_process_init, worker_process_shutdown
+
+_worker_loop: asyncio.AbstractEventLoop | None = None
+_loop_thread: threading.Thread | None = None
+
+@worker_process_init.connect
+def init_worker_loop(**kwargs):
+    """Initialize a long-lived event loop when worker process starts."""
+    global _worker_loop, _loop_thread
+    _worker_loop = asyncio.new_event_loop()
+    _loop_thread = threading.Thread(
+        target=lambda loop: (asyncio.set_event_loop(loop), loop.run_forever()),
+        args=(_worker_loop,),
+        daemon=True,
+    )
+    _loop_thread.start()
+
+@worker_process_shutdown.connect
+def shutdown_worker_loop(**kwargs):
+    """Gracefully shutdown the event loop."""
+    global _worker_loop, _loop_thread
+    if _worker_loop:
+        _worker_loop.call_soon_threadsafe(_worker_loop.stop)
+        if _loop_thread and _loop_thread.is_alive():
+            _loop_thread.join(timeout=5.0)
+        if not _worker_loop.is_closed():
+            _worker_loop.close()
+
+def run_in_worker_loop(coro):
+    """Run a coroutine in the worker's long-lived event loop."""
+    if _worker_loop is None:
+        raise RuntimeError("Worker event loop not initialized")
+    future = asyncio.run_coroutine_threadsafe(coro, _worker_loop)
+    return future.result()
+```
+
+## Database Patterns
+
+### Connection String (psycopg3)
+
+**CRITICAL**: Use `postgresql+psycopg://` for psycopg3, NOT `postgresql://`:
+
+```python
+def get_connection_string() -> str:
+    """Get SQLAlchemy connection string for PostgreSQL with psycopg3."""
+    # CRITICAL: Use postgresql+psycopg:// for psycopg3 (not psycopg2)
+    return f"postgresql+psycopg://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+```
+
+### Session Management
+
+```python
+from sqlalchemy import create_engine
+from sqlalchemy.orm import declarative_base, sessionmaker, Session
+
+engine = create_engine(get_connection_string())
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+def db_session() -> Generator[Session, None, None]:
+    """Database session dependency with auto commit/rollback."""
+    session = SessionLocal()
+    try:
+        yield session
+        session.commit()
+    except Exception as ex:
+        session.rollback()
+        raise ex
+    finally:
+        session.close()
+```
+
+### Model Pattern
+
+```python
+from sqlalchemy import Column, DateTime, String, Boolean, ForeignKey, Text, Integer, JSON
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
+
+class Run(Base):
+    """Model representing a workflow run."""
+
+    __tablename__ = "runs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    job_search_id = Column(UUID(as_uuid=True), ForeignKey("job_searches.id", ondelete="CASCADE"), nullable=True)
+    user_id = Column(String(255), ForeignKey("user.id", ondelete="SET NULL"), nullable=True)
+    task_id = Column(String(255), nullable=True)
+    status = Column(String(255), nullable=False, default="pending")
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    # Relationships
+    job_search = relationship("JobSearch", backref="runs")
+    user = relationship("User", backref="runs", foreign_keys=[user_id])
+
+    @classmethod
+    def from_context(cls, context: "WorkflowContext") -> "Run":
+        """Factory method from workflow context."""
+        return cls(
+            status="pending",
+            user_id=str(context.user_id) if context.user_id else None,
+        )
+```
+
+### GenericRepository Pattern
+
+```python
+from typing import Generic, TypeVar, Type, List, Optional
+
+T = TypeVar("T")
+
+class GenericRepository(Generic[T]):
+    """Generic repository for database operations."""
+
+    def __init__(self, session: Session, model: Type[T]):
+        self.session = session
+        self.model = model
+
+    def create(self, obj: T) -> T:
+        self.session.add(obj)
+        self.session.commit()
+        self.session.refresh(obj)
+        return obj
+
+    def get(self, id: Union[str, UUID]) -> Optional[T]:
+        return self.session.query(self.model).filter(self.model.id == id).first()
+
+    def update(self, obj: T) -> T:
+        self.session.merge(obj)
+        self.session.commit()
+        self.session.refresh(obj)
+        return obj
+
+    def filter_by(self, **kwargs) -> List[T]:
+        return self.session.query(self.model).filter_by(**kwargs).all()
+
+    def find_one(self, **kwargs) -> Optional[T]:
+        return self.session.query(self.model).filter_by(**kwargs).first()
+```
+
+## AI Agent Pattern (pydantic-ai)
+
+```python
+from pydantic_ai import Agent
+from pydantic import BaseModel, Field
+
+class JobScreeningOutput(BaseModel):
+    """Output model for job screening results."""
+
+    job_id: str
+    job_title: str
+    job_company: str
+    is_match: bool
+    reason: str
+    application_link: Optional[dict] = None
+
+class JobScreeningAgent:
+    """AI-powered job screening agent."""
+
+    def __init__(self, model: str = "google-gla:gemini-2.5-flash"):
+        self.agent = Agent(model=model, output_type=JobScreeningOutput)
+
+    def _build_prompt(self, user_profile: str, job: JobResult) -> str:
+        """Build the prompt for job matching."""
+        return f"""You are a job matcher. Analyze if a job posting matches a user profile.
+
+User profile: {user_profile}
+
+Job posting:
+- Title: {job.title}
+- Company: {job.company_name}
+- Description: {job.description}
+
+Return structured response with is_match, reason, etc."""
+
+    def match_job(self, user_profile: str, job: JobResult) -> Optional[JobScreeningOutput]:
+        """Match a single job against a user profile."""
+        try:
+            prompt = self._build_prompt(user_profile, job)
+            result = self.agent.run_sync(prompt)
+            return result.output
+        except Exception as e:
+            print(f"[WARNING] Failed to match job: {e}")
+            return None
+```
+
+## Real-time Status Publishing
+
+```python
+import json
+import redis
+
+def publish_run_status(
+    run_id: str,
+    status: str,
+    *,
+    node: Optional[str] = None,
+    message: Optional[str] = None,
+    error_message: Optional[str] = None,
+) -> None:
+    """Publish status event to Redis for SSE streaming."""
+    payload = {"status": status}
+    if node:
+        payload["node"] = node
+    if message:
+        payload["message"] = message
+    if error_message:
+        payload["error_message"] = error_message
+
+    channel = f"run:status:{run_id}"
+    try:
+        client = redis.Redis.from_url(get_redis_url())
+        client.publish(channel, json.dumps(payload))
+        client.close()
+    except Exception as e:
+        logger.warning("Failed to publish to Redis: %s", e)
+```
+
+## Configuration Pattern
+
+Centralize all constants in `config.py`:
+
+```python
+import os
+from dataclasses import dataclass
+
+@dataclass
+class LangfuseConfig:
+    """Langfuse observability configuration."""
+
+    enabled: bool = True
+    public_key: str = ""
+    secret_key: str = ""
+    host: str = "https://cloud.langfuse.com"
+
+    @classmethod
+    def from_env(cls) -> "LangfuseConfig":
+        public_key = os.getenv("LANGFUSE_PUBLIC_KEY", "").strip()
+        secret_key = os.getenv("LANGFUSE_SECRET_KEY", "").strip()
+        enabled = bool(public_key and secret_key)
+        return cls(enabled=enabled, public_key=public_key, secret_key=secret_key)
+
+# Workflow limits
+DEFAULT_NUM_RESULTS = 10
+DEFAULT_MAX_SCREENING = 5
+TESTING_MAX_SCREENING = 3
+DEFAULT_MAX_RETRIES = 3
+
+# API key
+JOB_LAND_API_KEY = "..."
+
+def get_api_key() -> str:
+    return JOB_LAND_API_KEY
+```
+
+## Import Structure
+
+### Database Module (`__init__.py`)
+
+```python
+from src.database.session import db_session, with_db_session, Base, engine
+from src.database.models import (
+    User, Run, JobSearch, JobPosting, MatchedJob,
+    CompanyResearch, Artifact, Session, Account, Verification,
+)
+from src.database.repository import (
+    GenericRepository,
+    save_job_search_from_context,
+    save_job_postings_from_context,
+    save_matched_jobs_from_context,
+)
+
+__all__ = [
+    "db_session", "with_db_session", "Base", "engine",
+    "User", "Run", "JobSearch", "JobPosting", "MatchedJob",
+    "CompanyResearch", "Artifact", "Session", "Account", "Verification",
+    "GenericRepository",
+    "save_job_search_from_context",
+    "save_job_postings_from_context",
+    "save_matched_jobs_from_context",
+]
+```
+
+### Using TYPE_CHECKING for Circular Imports
+
+```python
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.workflow.base_context import JobSearchWorkflowContext as WorkflowContext
+    from src.discovery.serpapi_models import JobResult
+```
+
+## Logging Pattern
+
+```python
+import logging
+
+# Module-level logger
+logger = logging.getLogger(__name__)
+
+# Class-specific logger
+class MyNode(BaseNode):
+    def __init__(self):
+        super().__init__()
+        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+```
+
+## Error Handling
+
+- Add errors to context instead of raising exceptions for recoverable errors
+- Use `context.add_error()` to track issues without stopping the workflow
+- Check `context.has_errors()` before proceeding to next node
+- Raise exceptions for unrecoverable errors (will be caught by workflow/task)
+
+```python
+async def _execute(self, context: Context) -> Context:
+    if not self._validate_context(context):
+        return context  # Errors already added
+
+    try:
+        # Node logic...
+    except RecoverableError as e:
+        context.add_error(f"Step failed: {e}")
+        # Continue workflow
+    except CriticalError as e:
+        context.add_error(f"Critical failure: {e}")
+        raise  # Stop workflow
+
+    return context
+```

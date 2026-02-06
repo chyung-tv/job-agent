@@ -1,0 +1,297 @@
+---
+description: Container deployment patterns for VPS (Dockerfile, Docker Compose, Caddy, setup scripts)
+globs: Dockerfile*,docker-compose*.yml,Caddyfile,setup.sh,start.sh,stop.sh,scripts/*.sh,.env.example
+alwaysApply: false
+---
+
+# Container Deployment Patterns
+
+Enforces the established patterns for VPS container deployment with Docker Compose, Caddy reverse proxy, and multi-environment support (dev/prod).
+
+## Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Caddy (80/443) - TLS termination, domain-based routing     │
+├─────────────────────────────────────────────────────────────┤
+│  api.domain.com → api:8000     app.domain.com → frontend:3000
+│  flower.domain.com → flower:5555 (Basic Auth)               │
+├─────────────────────────────────────────────────────────────┤
+│  Services: postgres, redis, api, celery-worker, flower      │
+│  All on shared bridge network (job-agent-network)           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## Dockerfile Patterns
+
+### Python Backend: Multi-Stage Build (Production)
+
+```dockerfile
+# Stage 1: Build dependencies with uv (faster than pip)
+FROM python:3.13-slim as builder
+WORKDIR /app
+RUN apt-get update && apt-get install -y build-essential && rm -rf /var/lib/apt/lists/*
+COPY pyproject.toml uv.lock* ./
+RUN pip install --upgrade pip && pip install uv && uv pip install --system .
+
+# Stage 2: Runtime (minimal image)
+FROM python:3.13-slim
+WORKDIR /app
+RUN apt-get update && apt-get install -y libpq5 && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+COPY . .
+ENV PYTHONUNBUFFERED=1 PYTHONPATH=/app
+EXPOSE 8000
+CMD ["uvicorn", "src.api.api:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+```
+
+### Python Backend: Single-Stage (Development)
+
+```dockerfile
+FROM python:3.13-slim
+WORKDIR /app
+RUN apt-get update && apt-get install -y libpq5 postgresql-client && rm -rf /var/lib/apt/lists/*
+COPY pyproject.toml uv.lock* ./
+RUN pip install --upgrade pip && pip install uv && uv pip install --system .
+COPY . .
+ENV PYTHONUNBUFFERED=1 PYTHONPATH=/app
+EXPOSE 8000 5555
+CMD ["uvicorn", "src.api.api:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+```
+
+### Next.js Frontend: Multi-Stage with Standalone Output
+
+```dockerfile
+# syntax=docker/dockerfile:1
+FROM node:22-alpine AS builder
+WORKDIR /app
+COPY frontend/package*.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci
+COPY frontend/ .
+ENV DATABASE_URL="postgresql://build:build@localhost:5432/build"
+RUN npx prisma generate && npm run build
+
+FROM node:22-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV=production HOSTNAME=0.0.0.0
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:3000/api/health || exit 1
+EXPOSE 3000
+CMD ["node", "server.js"]
+```
+
+## Docker Compose Patterns
+
+### Base File (`docker-compose.yml`): Full Service Definitions
+
+All services defined with complete config. Use for both dev (alone) and prod (as base).
+
+```yaml
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: job-agent-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_INIT_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-job_agent}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db-users.sh:/docker-entrypoint-initdb.d/init-db-users.sh
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - job-agent-network
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: job-agent-api
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      # ... all env vars with ${VAR:-default} pattern
+    volumes:
+      - ./src:/app/src  # Dev: mount source for hot reload
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - job-agent-network
+    command: ["uvicorn", "src.api.api:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  job-agent-network:
+    driver: bridge
+```
+
+### Production Overrides (`docker-compose.prod.yml`): Minimal Changes Only
+
+Only override what differs from dev. Run with: `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d`
+
+```yaml
+# Production overrides only. Base config comes from docker-compose.yml.
+services:
+  postgres:
+    ports: ["127.0.0.1:5433:5432"]  # Bind to localhost only, SSH tunnel for access
+
+  redis:
+    ports: []  # No host exposure in prod
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile  # Production Dockerfile (multi-stage)
+    ports: []  # Caddy handles routing
+    volumes: []  # No source mounts in prod
+    command: ["uvicorn", "src.api.api:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+
+  frontend:
+    ports: []  # Caddy handles routing
+    environment:
+      NEXT_PUBLIC_API_URL: https://${API_DOMAIN}
+      BETTER_AUTH_URL: https://${FRONTEND_DOMAIN}
+```
+
+## Caddyfile Patterns
+
+Domain-based routing with automatic TLS:
+
+```caddyfile
+# Apex redirect (yourapp.com → app.yourapp.com)
+{$APEX_DOMAIN} {
+    redir https://{$FRONTEND_DOMAIN}{uri} permanent
+}
+
+# Frontend
+{$FRONTEND_DOMAIN} {
+    reverse_proxy frontend:3000
+}
+
+# API with long timeout for SSE connections
+{$API_DOMAIN} {
+    reverse_proxy api:8000 {
+        transport http {
+            read_timeout 600s
+        }
+    }
+}
+
+# Optional: Flower with Basic Auth (uncomment in production)
+# {$FLOWER_DOMAIN} {
+#     basicauth * {$FLOWER_BASIC_AUTH_USER} {$FLOWER_BASIC_AUTH_HASH}
+#     reverse_proxy flower:5555
+# }
+```
+
+## Setup Script Patterns
+
+Menu-driven + CLI flags for automation:
+
+```bash
+#!/usr/bin/env bash
+set -e
+
+# Mode switching: dev (default) or prod
+MODE="dev"
+COMPOSE_BASE="docker compose"
+
+set_compose() {
+  if [ "$MODE" = "prod" ]; then
+    COMPOSE_BASE="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
+  fi
+}
+
+# Actions
+action_start() { $COMPOSE_BASE up -d --build; }
+action_stop() { $COMPOSE_BASE down; }
+action_migrate() { $COMPOSE_BASE run --rm api python -c "...alembic upgrade head..."; }
+
+# Parse args: ./setup.sh --start --prod
+for arg in "$@"; do
+  case "$arg" in
+    --prod) MODE="prod" ;;
+    --start) set_compose; action_start; exit 0 ;;
+    --stop) set_compose; action_stop; exit 0 ;;
+  esac
+done
+```
+
+## Database User Pattern (Two-User Security)
+
+```sql
+-- Admin user (backend/alembic): full privileges
+CREATE ROLE job_agent_admin WITH LOGIN PASSWORD '...';
+GRANT ALL ON SCHEMA public TO job_agent_admin;
+ALTER SCHEMA public OWNER TO job_agent_admin;
+
+-- UI user (frontend): limited privileges
+CREATE ROLE job_agent_ui WITH LOGIN PASSWORD '...';
+GRANT USAGE ON SCHEMA public TO job_agent_ui;
+ALTER DEFAULT PRIVILEGES FOR ROLE job_agent_admin IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO job_agent_ui;
+```
+
+## Environment Variable Organization (.env.example)
+
+```bash
+############################
+# Database (core settings) #
+############################
+POSTGRES_USER=job_agent_admin
+POSTGRES_PASSWORD=
+POSTGRES_INIT_PASSWORD=
+POSTGRES_UI_PASSWORD=
+POSTGRES_DB=job_agent
+
+########################
+# Domain configuration #
+########################
+API_DOMAIN=            # api.yourapp.com (prod) or localhost (dev)
+FRONTEND_DOMAIN=       # app.yourapp.com (prod)
+APEX_DOMAIN=           # yourapp.com (redirects to FRONTEND_DOMAIN)
+
+#################################
+# Flower auth (production only) #
+#################################
+FLOWER_BASIC_AUTH_USER=
+FLOWER_BASIC_AUTH_HASH=   # bcrypt hash, escape $ as $$
+```
+
+## Deployment Workflow
+
+1. **Local dev:** `./start.sh --dev` (uses docker-compose.yml only)
+2. **First-time prod:** SSH to VPS, clone repo, copy `.env`, run `./setup.sh --first-time --prod`
+3. **Update prod:** `git pull && ./setup.sh --restart --prod`
+4. **View DB in prod:** SSH tunnel to localhost:5433, connect with client
+
+## Key Conventions
+
+- Container names: `job-agent-{service}` pattern
+- Network: Single bridge network for inter-service communication
+- Health checks: All critical services (postgres, redis, frontend)
+- Volumes: Named volumes for data persistence, bind mounts for dev only
+- Ports: Exposed in dev, hidden behind Caddy in prod
+- Secrets: All in `.env`, never committed, copy via scp

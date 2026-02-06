@@ -1,0 +1,322 @@
+---
+description: Project Index & Architecture Map - The primary source of truth for cross-end orchestration.
+globs: **/*
+alwaysApply: true
+---
+
+# Job Agent - Master Architecture Index
+
+This is the central orchestration document for the Job Agent monorepo. It provides an architectural overview, cross-end contracts, and routing guidance for specialized rule files.
+
+## Monorepo Map
+
+```
+job-agent/
+├── frontend/                 # Next.js 16+ App Router (TypeScript)
+│   ├── app/                  # Pages, layouts, API routes
+│   ├── actions/              # Server Actions (backend calls)
+│   ├── components/           # React components (ui/, dashboard/, layout/)
+│   ├── lib/                  # Auth, Prisma, utilities
+│   ├── services/             # URL builders, helpers
+│   ├── store/                # Zustand state management
+│   ├── types/                # Zod schemas + TypeScript types
+│   └── prisma/schema.prisma  # Database schema (read-only user)
+│
+├── src/                      # Python FastAPI Backend
+│   ├── api/api.py            # FastAPI endpoints (single file)
+│   ├── celery_app.py         # Celery configuration
+│   ├── config.py             # Centralized constants
+│   ├── database/             # SQLAlchemy models, session, repository
+│   ├── tasks/                # Celery task definitions
+│   ├── workflow/             # Node-based workflow engine
+│   │   ├── base_*.py         # BaseContext, BaseNode, BaseWorkflow
+│   │   ├── nodes/            # Individual workflow nodes
+│   │   └── *_workflow.py     # Workflow orchestrators
+│   ├── discovery/            # SerpAPI job search
+│   ├── matcher/              # AI job screening (pydantic-ai)
+│   ├── research/             # Company research agent
+│   ├── fabrication/          # CV/cover letter generation
+│   ├── delivery/             # Email delivery (Nylas)
+│   └── profiling/            # PDF parsing, profile extraction
+│
+├── alembic/                  # Database migrations
+│   └── versions/             # Migration scripts
+│
+├── test/                     # pytest test suite
+│
+├── scripts/                  # Database init, permission grants
+│
+├── docker-compose.yml        # Development stack
+├── docker-compose.prod.yml   # Production overrides
+├── Dockerfile                # Production backend image
+├── Dockerfile.dev            # Development backend image
+├── Dockerfile.frontend       # Frontend image (standalone)
+├── Caddyfile                 # Reverse proxy configuration
+├── setup.sh                  # Deployment automation
+└── .env.example              # Environment template
+```
+
+## Service Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Caddy (80/443)                               │
+│            TLS termination, domain-based routing                │
+├─────────────────────────────────────────────────────────────────┤
+│  {FRONTEND_DOMAIN} → frontend:3000                              │
+│  {API_DOMAIN} → api:8000 (read_timeout 600s for SSE)            │
+│  {APEX_DOMAIN} → redirect to {FRONTEND_DOMAIN}                  │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐         │
+│  │  Frontend   │    │     API     │    │   Celery    │         │
+│  │  Next.js    │───▶│   FastAPI   │───▶│   Worker    │         │
+│  │   :3000     │    │   :8000     │    │             │         │
+│  └─────────────┘    └─────────────┘    └─────────────┘         │
+│         │                  │                  │                 │
+│         │                  │                  │                 │
+│         ▼                  ▼                  ▼                 │
+│  ┌─────────────────────────────────────────────────┐           │
+│  │              PostgreSQL :5432                    │           │
+│  │  job_agent_ui (frontend) │ job_agent_admin (api) │           │
+│  └─────────────────────────────────────────────────┘           │
+│         │                                                       │
+│         │    ┌─────────────┐    ┌─────────────┐                │
+│         │    │    Redis    │    │   Flower    │                │
+│         │    │   :6379     │    │   :5555     │                │
+│         │    │ (broker)    │    │ (monitoring)│                │
+│         │    └─────────────┘    └─────────────┘                │
+│         ▼                                                       │
+│  job-agent-network (bridge)                                     │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+## Primary Entry Points
+
+| Component | File | Port | Purpose |
+|-----------|------|------|---------|
+| **API** | `src/api/api.py` | 8000 | FastAPI endpoints |
+| **Frontend** | `frontend/app/layout.tsx` | 3000 | Root layout |
+| **Celery** | `src/celery_app.py` | - | Task queue |
+| **Database** | `src/database/models.py` | 5432 | SQLAlchemy models |
+| **Prisma** | `frontend/prisma/schema.prisma` | - | Frontend ORM |
+
+## Cross-End Contracts
+
+### API Communication Pattern
+
+Frontend **never** calls the backend directly from the browser. All API calls go through Next.js Server Actions:
+
+```
+Browser → Server Action (actions/*.ts) → FastAPI Backend
+                  │
+                  └── Adds X-API-Key header (from env.API_KEY)
+```
+
+**SSE streaming exception:** The frontend proxies SSE through `/api/workflow/status/[runId]/stream` to add the API key server-side while maintaining the event stream to the browser.
+
+### Authentication
+
+| Layer | Method | Header/Field |
+|-------|--------|--------------|
+| Backend API | API Key | `X-API-Key: {JOB_LAND_API_KEY}` |
+| Frontend Auth | Better Auth | Session cookie + `better-auth` |
+| Database (frontend) | Limited user | `job_agent_ui` (SELECT/INSERT/UPDATE/DELETE) |
+| Database (backend) | Admin user | `job_agent_admin` (full DDL) |
+
+### API Endpoints
+
+| Endpoint | Method | Purpose | Auth |
+|----------|--------|---------|------|
+| `/health` | GET | Health check | None |
+| `/workflow/profiling` | POST | Start profiling workflow | API Key |
+| `/workflow/job-search` | POST | Start job search workflow | API Key |
+| `/workflow/job-search/from-profile` | POST | Search from user profile | API Key |
+| `/workflow/status/{run_id}` | GET | Poll run status | API Key |
+| `/workflow/status/{run_id}/stream` | GET | SSE status stream | API Key |
+
+### Naming Conventions
+
+| Context | Convention | Example |
+|---------|------------|---------|
+| Python (backend) | snake_case | `run_id`, `job_search_id` |
+| TypeScript (frontend) | camelCase | `runId`, `jobSearchId` |
+| Database columns | snake_case | `created_at`, `user_id` |
+| Better Auth columns | camelCase | `createdAt`, `emailVerified` |
+| API request/response | snake_case | `{ "run_id": "...", "status": "..." }` |
+| Zod schemas | snake_case keys | `z.object({ run_id: z.string() })` |
+
+### Type Contracts (Shared Schemas)
+
+Frontend Zod schemas in `frontend/types/workflow.ts` mirror backend Pydantic models:
+
+```
+Backend (Pydantic)              Frontend (Zod)
+─────────────────               ──────────────
+ProfilingWorkflow.Context   ↔   profilingWorkflowRequestSchema
+JobSearchWorkflow.Context   ↔   jobSearchWorkflowRequestSchema
+RunStatusResponse           ↔   runStatusResponseSchema
+```
+
+**Critical:** When modifying API contracts, update both:
+1. `src/api/api.py` + `src/workflow/base_context.py` (backend)
+2. `frontend/types/workflow.ts` (frontend)
+
+## Specialist Handoff
+
+Use these rules when working on specific areas:
+
+### @frontend.mdc
+**Trigger when:**
+- Modifying files in `frontend/`
+- Working with React components, Next.js pages, or layouts
+- Implementing Tailwind CSS styling or shadcn/ui components
+- Creating Server Actions or API routes
+- Working with Prisma queries or Zustand stores
+
+### @backend.mdc
+**Trigger when:**
+- Modifying files in `src/`
+- Working with FastAPI endpoints or Pydantic models
+- Implementing workflow nodes or Celery tasks
+- Creating database models (SQLAlchemy) or repository methods
+- Working with AI agents (pydantic-ai, Gemini)
+
+### @testing.mdc
+**Trigger when:**
+- Writing or modifying tests in `test/`
+- Debugging test failures
+- Validating code changes before commit
+- Running pytest commands or integration tests
+
+### @deployment.mdc
+**Trigger when:**
+- Modifying Docker or Compose files
+- Working with Caddyfile or reverse proxy config
+- Managing environment variables or secrets
+- Running deployment scripts (`setup.sh`)
+- Configuring production vs development environments
+
+## Environment Variables
+
+### Backend (Python)
+
+| Variable | Purpose | Example |
+|----------|---------|---------|
+| `DATABASE_URL` | SQLAlchemy connection | `postgresql+psycopg://...` |
+| `CELERY_BROKER_URL` | Redis broker | `redis://redis:6379/0` |
+| `GEMINI_API_KEY` | AI model access | - |
+| `SERPAPI_KEY` | Job search API | - |
+| `JOB_LAND_API_KEY` | Internal API auth | - |
+
+### Frontend (Next.js)
+
+| Variable | Exposed | Purpose |
+|----------|---------|---------|
+| `NEXT_PUBLIC_API_URL` | Yes | Backend URL for client display |
+| `API_KEY` | No | Backend auth (Server Actions only) |
+| `DATABASE_URL` | No | Prisma connection (job_agent_ui) |
+| `BETTER_AUTH_SECRET` | No | Session encryption |
+| `BETTER_AUTH_GOOGLE_*` | No | OAuth credentials |
+
+---
+
+## Active State
+
+### Current Database Schema
+
+**Core Tables:**
+
+| Table | Owner | Purpose |
+|-------|-------|---------|
+| `user` | Better Auth | User accounts + profile data |
+| `runs` | Backend | Workflow execution tracking |
+| `job_searches` | Backend | Search parameters & stats |
+| `job_postings` | Backend | Raw job listings from SerpAPI |
+| `matched_jobs` | Backend | AI-screened job matches |
+| `company_research` | Backend | Research results per job |
+| `artifacts` | Backend | Generated CVs and cover letters |
+| `session` | Better Auth | User sessions |
+| `account` | Better Auth | OAuth provider links |
+| `verification` | Better Auth | Email verification tokens |
+
+**Key Relationships:**
+
+```
+user
+ ├── runs (1:N)
+ ├── job_searches (1:N)
+ └── matched_jobs (1:N)
+
+job_searches
+ ├── job_postings (1:N)
+ ├── matched_jobs (1:N)
+ └── runs (1:N)
+
+matched_jobs
+ ├── artifacts (1:1)
+ └── job_postings (1:1) → company_research (1:1)
+```
+
+**Migration Version:** `004_add_user_has_access`
+
+### Active Focus
+
+<!-- Update this section to track current development focus -->
+
+**Current Sprint:** Production Deployment Fixes
+
+**Active Debug Log:** [.cursor/DEBUG_LOG.md](../.cursor/DEBUG_LOG.md)
+
+**In Progress:**
+- [ ] Fix Alembic migration execution in production container
+- [ ] Fix frontend Docker build (missing `public/` folder)
+- [ ] Fix psql variable interpolation in user creation script
+
+**Recently Completed:**
+- [x] Beta access control (`hasAccess` field)
+- [x] User scoping for all entities
+- [x] Workflow status SSE streaming
+
+**Known Issues:**
+- Job postings may accumulate; consider deduplication strategy
+- **BLOCKING:** Production deployment blocked by Alembic + Docker issues (see DEBUG_LOG.md)
+
+---
+
+## Quick Reference
+
+### Common Commands
+
+```bash
+# Start development stack
+./start.sh
+
+# Stop all services
+./stop.sh
+
+# Run database migrations
+docker compose exec api alembic upgrade head
+
+# Run backend tests
+uv run pytest test/ -v
+
+# Generate Prisma client
+cd frontend && npx prisma generate
+
+# View container logs
+docker compose logs -f api celery-worker
+```
+
+### File Locations
+
+| Need to find... | Look in... |
+|-----------------|------------|
+| API endpoints | `src/api/api.py` |
+| Workflow nodes | `src/workflow/nodes/` |
+| Database models | `src/database/models.py` |
+| Prisma schema | `frontend/prisma/schema.prisma` |
+| Server Actions | `frontend/actions/` |
+| UI components | `frontend/components/` |
+| Zod types | `frontend/types/workflow.ts` |
+| Environment vars | `.env.example` |

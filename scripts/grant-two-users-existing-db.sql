@@ -6,9 +6,9 @@
 \set ON_ERROR_STOP on
 
 -- Create roles if they don't exist, or alter password if they do
--- Set session variables for the DO block to access
-SELECT set_config('var.admin_pass', :'admin_pass', true);
-SELECT set_config('var.ui_pass', :'ui_pass', true);
+-- Set session variables for the DO block to access (false = session-level, persists across transactions)
+SELECT set_config('var.admin_pass', :'admin_pass', false);
+SELECT set_config('var.ui_pass', :'ui_pass', false);
 
 DO $$
 DECLARE

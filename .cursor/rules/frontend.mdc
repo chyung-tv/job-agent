@@ -1,0 +1,692 @@
+---
+description: Frontend patterns for Next.js 16, Tailwind CSS v4, shadcn/ui, Zustand, and better-auth
+globs: frontend/**/*
+alwaysApply: false
+---
+
+# Frontend Development Patterns
+
+This rule enforces the established patterns for the Job Agent frontend application.
+
+## Tech Stack
+
+- **Framework**: Next.js 16+ with App Router
+- **Styling**: Tailwind CSS v4 with shadcn/ui (New York style)
+- **State Management**: Zustand for client state
+- **Forms**: React Hook Form + Zod validation
+- **Database**: Prisma with PostgreSQL
+- **Auth**: better-auth with Prisma adapter
+- **Icons**: lucide-react
+
+## Project Structure
+
+```
+frontend/
+├── actions/          # Server Actions ("use server")
+├── app/              # App Router pages and API routes
+│   ├── (auth)/       # Auth route group
+│   ├── api/          # API route handlers
+│   ├── dashboard/    # Protected dashboard pages
+│   └── onboarding/   # Onboarding flow pages
+├── components/
+│   ├── dashboard/    # Feature-specific components
+│   ├── layout/       # Layout components
+│   └── ui/           # shadcn/ui primitives
+├── hooks/            # Custom React hooks
+├── lib/              # Utilities and configurations
+├── services/         # API service helpers
+├── store/            # Zustand stores
+└── types/            # Zod schemas and TypeScript types
+```
+
+## Next.js Patterns
+
+### Server Components (Default)
+
+Pages are async Server Components by default. Fetch data directly:
+
+```tsx
+// app/dashboard/matches/page.tsx
+import { headers } from "next/headers";
+import { auth } from "@/lib/auth";
+import prisma from "@/lib/prisma";
+
+export default async function MatchesPage() {
+  const session = await auth.api.getSession({
+    headers: await headers(),
+  });
+
+  if (!session?.user?.id) {
+    return null;
+  }
+
+  const matches = await prisma.matched_jobs.findMany({
+    where: { user_id: session.user.id },
+    orderBy: { created_at: "desc" },
+  });
+
+  return <div>{/* Render matches */}</div>;
+}
+```
+
+### Client Components
+
+Use `"use client"` directive only when needed (hooks, interactivity, browser APIs):
+
+```tsx
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { useForm } from "react-hook-form";
+
+export default function InteractivePage() {
+  // Client-side logic here
+}
+```
+
+### Loading States
+
+Create `loading.tsx` alongside pages for Suspense fallbacks:
+
+```tsx
+// app/dashboard/matches/loading.tsx
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+
+export default function MatchesLoading() {
+  return (
+    <div className="space-y-6">
+      <Skeleton className="h-8 w-32" />
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        {[...Array(6)].map((_, i) => (
+          <Card key={i}>
+            <CardHeader>
+              <Skeleton className="h-5 w-40" />
+            </CardHeader>
+            <CardContent>
+              <Skeleton className="h-4 w-full" />
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
+```
+
+### Error Boundaries
+
+Create `error.tsx` files with `"use client"`:
+
+```tsx
+"use client";
+
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { AlertCircle, RefreshCw } from "lucide-react";
+
+interface ErrorProps {
+  error: Error & { digest?: string };
+  reset: () => void;
+}
+
+export default function DashboardError({ error, reset }: ErrorProps) {
+  return (
+    <Card className="w-full max-w-md">
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <AlertCircle className="h-5 w-5 text-destructive" />
+          <CardTitle>Something went wrong</CardTitle>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <p className="text-sm text-muted-foreground">
+          An error occurred. Please try again.
+        </p>
+      </CardContent>
+      <CardFooter>
+        <Button onClick={reset} className="w-full">
+          <RefreshCw className="mr-2 h-4 w-4" />
+          Try Again
+        </Button>
+      </CardFooter>
+    </Card>
+  );
+}
+```
+
+### Layouts with Auth Protection
+
+```tsx
+// app/dashboard/layout.tsx
+import { redirect } from "next/navigation";
+import { headers } from "next/headers";
+import { auth } from "@/lib/auth";
+
+export default async function DashboardLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  const session = await auth.api.getSession({
+    headers: await headers(),
+  });
+
+  if (!session?.user) {
+    redirect("/signup");
+  }
+
+  return (
+    <div className="min-h-screen flex flex-col">
+      <main className="flex-1 p-4 md:p-6">{children}</main>
+    </div>
+  );
+}
+```
+
+### API Routes
+
+Use route handlers for streaming and external API proxying:
+
+```tsx
+// app/api/workflow/status/[runId]/stream/route.ts
+export const maxDuration = 600;
+
+export async function GET(
+  request: Request,
+  context: { params: Promise<{ runId: string }> }
+) {
+  const { runId } = await context.params;
+  // Handle streaming response
+}
+```
+
+## Server Actions
+
+Place in `actions/` directory with `"use server"` directive:
+
+```tsx
+// actions/workflow.ts
+"use server";
+
+import { auth } from "@/lib/auth";
+import prisma from "@/lib/prisma";
+import { headers } from "next/headers";
+import { workflowRequestSchema, type WorkflowRequest } from "@/types/workflow";
+
+export async function triggerWorkflow(data: WorkflowRequest) {
+  // 1. Validate with Zod
+  const validatedData = workflowRequestSchema.parse(data);
+
+  // 2. Check authentication
+  const session = await auth.api.getSession({
+    headers: await headers(),
+  });
+  if (!session?.user?.id) {
+    throw new Error("Authentication required");
+  }
+
+  // 3. Make API request with server-side secrets
+  const apiKey = process.env.API_KEY;
+  const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/workflow`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-Key": apiKey!,
+    },
+    body: JSON.stringify(validatedData),
+  });
+
+  // 4. Validate response
+  return responseSchema.parse(await response.json());
+}
+```
+
+## Tailwind CSS v4 Patterns
+
+### CSS Variables with OKLCH
+
+Use the established color system in `globals.css`:
+
+```css
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  /* ... other semantic colors */
+}
+
+:root {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  /* ... */
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  /* ... */
+}
+```
+
+### Class Composition with cn()
+
+Always use the `cn()` utility for conditional classes:
+
+```tsx
+import { cn } from "@/lib/utils";
+
+<div className={cn(
+  "flex items-center gap-2",
+  "text-muted-foreground",
+  isActive && "text-primary",
+  className
+)} />
+```
+
+### Responsive Design
+
+Use mobile-first responsive classes:
+
+```tsx
+<div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+  {/* Content */}
+</div>
+
+<main className="flex-1 p-4 md:p-6">
+  {/* Content */}
+</main>
+```
+
+## shadcn/ui Component Patterns
+
+### Import from @/components/ui
+
+```tsx
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+```
+
+### CVA Variants
+
+Components use `class-variance-authority` for variants:
+
+```tsx
+import { cva, type VariantProps } from "class-variance-authority";
+
+const buttonVariants = cva(
+  "inline-flex items-center justify-center rounded-md text-sm font-medium transition-all",
+  {
+    variants: {
+      variant: {
+        default: "bg-primary text-primary-foreground hover:bg-primary/90",
+        destructive: "bg-destructive text-white hover:bg-destructive/90",
+        outline: "border bg-background hover:bg-accent",
+        ghost: "hover:bg-accent hover:text-accent-foreground",
+      },
+      size: {
+        default: "h-9 px-4 py-2",
+        sm: "h-8 rounded-md px-3",
+        lg: "h-10 rounded-md px-6",
+        icon: "size-9",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+      size: "default",
+    },
+  }
+);
+```
+
+### asChild Pattern with Slot
+
+Use `asChild` prop with Radix Slot for polymorphic components:
+
+```tsx
+import { Slot } from "radix-ui";
+
+function Button({ asChild = false, ...props }) {
+  const Comp = asChild ? Slot.Root : "button";
+  return <Comp {...props} />;
+}
+
+// Usage with Link
+<Button asChild>
+  <Link href="/dashboard">Go to Dashboard</Link>
+</Button>
+```
+
+## Zustand State Management
+
+### Store Pattern
+
+```tsx
+// store/useOnboardingStore.ts
+import { create } from "zustand";
+import { persist, createJSONStorage } from "zustand/middleware";
+
+interface OnboardingState {
+  name: string | null;
+  email: string | null;
+  // Actions
+  setName: (name: string) => void;
+  setEmail: (email: string) => void;
+  reset: () => void;
+}
+
+// SSR-safe storage implementation
+const sessionStorageImpl = {
+  getItem: (name: string): string | null => {
+    if (typeof window === "undefined") return null;
+    try {
+      return sessionStorage.getItem(name);
+    } catch {
+      return null;
+    }
+  },
+  setItem: (name: string, value: string): void => {
+    if (typeof window === "undefined") return;
+    try {
+      sessionStorage.setItem(name, value);
+    } catch {}
+  },
+  removeItem: (name: string): void => {
+    if (typeof window === "undefined") return;
+    try {
+      sessionStorage.removeItem(name);
+    } catch {}
+  },
+};
+
+export const useOnboardingStore = create<OnboardingState>()(
+  persist(
+    (set) => ({
+      name: null,
+      email: null,
+      setName: (name: string) => set({ name }),
+      setEmail: (email: string) => set({ email }),
+      reset: () => set({ name: null, email: null }),
+    }),
+    {
+      name: "onboarding-storage",
+      storage: createJSONStorage(() => sessionStorageImpl),
+    }
+  )
+);
+```
+
+## Forms with React Hook Form + Zod
+
+### Form Pattern
+
+```tsx
+"use client";
+
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+
+const formSchema = z.object({
+  name: z.string().min(1, "Name is required"),
+  email: z.string().email("Invalid email address"),
+});
+
+type FormValues = z.infer<typeof formSchema>;
+
+export default function MyForm() {
+  const form = useForm<FormValues>({
+    resolver: zodResolver(formSchema),
+    defaultValues: { name: "", email: "" },
+  });
+
+  const onSubmit = async (values: FormValues) => {
+    // Handle submission
+  };
+
+  return (
+    <Form {...form}>
+      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+        <FormField
+          control={form.control}
+          name="name"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Name</FormLabel>
+              <FormControl>
+                <Input {...field} placeholder="Your name" />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        <Button type="submit">Submit</Button>
+      </form>
+    </Form>
+  );
+}
+```
+
+## Type Definitions with Zod
+
+### Schema + Type Pattern
+
+```tsx
+// types/workflow.ts
+import { z } from "zod";
+
+// Define Zod schema
+export const workflowRequestSchema = z.object({
+  name: z.string().min(1, "Name is required"),
+  email: z.string().email("Invalid email address"),
+  location: z.string().min(1, "Location is required"),
+});
+
+// Infer TypeScript type from schema
+export type WorkflowRequest = z.infer<typeof workflowRequestSchema>;
+
+// Response schema with validation
+export const workflowResponseSchema = z.object({
+  run_id: z.string().uuid("Invalid run ID format"),
+  status: z.enum(["pending", "processing", "completed", "failed"]),
+});
+
+export type WorkflowResponse = z.infer<typeof workflowResponseSchema>;
+```
+
+## Custom Hooks
+
+### Hook Pattern with SSE
+
+```tsx
+// hooks/useRunStatus.ts
+import { useEffect, useState, useRef } from "react";
+
+export interface UseRunStatusReturn {
+  status: string | null;
+  isConnected: boolean;
+  connectionError: Error | null;
+}
+
+export function useRunStatus(
+  runId: string,
+  options: { enabled?: boolean; onComplete?: (status: string) => void } = {}
+): UseRunStatusReturn {
+  const { enabled = true, onComplete } = options;
+  const [status, setStatus] = useState<string | null>(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const [connectionError, setConnectionError] = useState<Error | null>(null);
+  const onCompleteRef = useRef(onComplete);
+
+  useEffect(() => {
+    onCompleteRef.current = onComplete;
+  }, [onComplete]);
+
+  useEffect(() => {
+    if (!enabled || !runId) return;
+
+    const eventSource = new EventSource(`/api/workflow/status/${runId}/stream`);
+
+    eventSource.onopen = () => {
+      setIsConnected(true);
+      setConnectionError(null);
+    };
+
+    eventSource.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      setStatus(data.status);
+
+      if (data.status === "completed" || data.status === "failed") {
+        eventSource.close();
+        setIsConnected(false);
+        onCompleteRef.current?.(data.status);
+      }
+    };
+
+    eventSource.onerror = () => {
+      setConnectionError(new Error("SSE connection error"));
+      setIsConnected(false);
+    };
+
+    return () => {
+      eventSource.close();
+      setIsConnected(false);
+    };
+  }, [runId, enabled]);
+
+  return { status, isConnected, connectionError };
+}
+```
+
+## Authentication Patterns
+
+### Server-Side Auth Check
+
+```tsx
+import { headers } from "next/headers";
+import { auth } from "@/lib/auth";
+
+// In Server Component or Server Action
+const session = await auth.api.getSession({
+  headers: await headers(),
+});
+
+if (!session?.user?.id) {
+  // Handle unauthenticated state
+}
+```
+
+### Client-Side Auth
+
+```tsx
+"use client";
+
+import { authClient } from "@/lib/auth-client";
+
+// Get session
+const session = await authClient.getSession();
+
+// Sign in with Google
+await authClient.signIn.social({ provider: "google" });
+
+// Sign out
+await authClient.signOut();
+```
+
+## Database Access
+
+### Prisma Singleton
+
+```tsx
+// lib/prisma.ts
+import { PrismaClient } from "@prisma/client";
+import { PrismaPg } from "@prisma/adapter-pg";
+import { Pool } from "pg";
+
+const prismaClientSingleton = () => {
+  const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+  });
+  const adapter = new PrismaPg(pool);
+  return new PrismaClient({ adapter });
+};
+
+declare global {
+  var prismaGlobal: undefined | ReturnType<typeof prismaClientSingleton>;
+}
+
+const prisma = globalThis.prismaGlobal ?? prismaClientSingleton();
+export default prisma;
+
+if (process.env.NODE_ENV !== "production") globalThis.prismaGlobal = prisma;
+```
+
+## Component Prop Patterns
+
+### Interface with Explicit Props
+
+```tsx
+interface MatchCardProps {
+  match: {
+    id: string;
+    title: string;
+    company: string;
+    location: string | null;
+    createdAt: Date;
+  };
+}
+
+export function MatchCard({ match }: MatchCardProps) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{match.title}</CardTitle>
+      </CardHeader>
+    </Card>
+  );
+}
+```
+
+## Environment Variables
+
+- `NEXT_PUBLIC_*` - Exposed to client (API URLs only)
+- Server-only - Secrets like `API_KEY`, `DATABASE_URL`, auth secrets
+
+```tsx
+// Client-safe
+const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+
+// Server-only (in Server Components, Actions, or API routes)
+const apiKey = process.env.API_KEY;
+const dbUrl = process.env.DATABASE_URL;
+```
+
+## Import Aliases
+
+Use `@/` path alias for imports:
+
+```tsx
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+import { useOnboardingStore } from "@/store/useOnboardingStore";
+import { auth } from "@/lib/auth";
+import prisma from "@/lib/prisma";
+```

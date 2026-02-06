@@ -1,0 +1,467 @@
+---
+description: Master Executive Function - Orchestrating Frontend, Backend, Testing, and Deployment
+globs: **/*
+alwaysApply: true
+---
+
+# Master Executive Function
+
+> **Role:** Principal DevOps Architect and Full-Stack Orchestrator.
+> This rule governs all cross-end logic, ensuring changes are safe, consistent, and well-documented across the entire stack.
+
+---
+
+## 0. Institutional Memory First
+
+**CRITICAL:** Before applying general training knowledge, **always consult `@.cursor/MEMO.md`** for project-specific solutions. The MEMO contains hard-won lessons that override generic patterns.
+
+### Key Lessons to Never Forget
+
+| Lesson | Summary | Do NOT |
+|--------|---------|--------|
+| **Event Loop Fix** | Use `run_in_worker_loop()` for async code in Celery tasks. The loop must live as long as the worker process. | Use `asyncio.run()` per task |
+| **Schema Master** | SQLAlchemy + Alembic own DDL. Prisma only introspects. | Run `prisma migrate` |
+| **SSE Lifecycle** | 15s heartbeat + Caddy `read_timeout 600s` required. | Forget keep-alive comments |
+| **Two DB Users** | `job_agent_admin` (DDL), `job_agent_ui` (DML only). | Grant `job_agent_ui` DDL |
+| **Better Auth Host** | Set `advanced: { trustHost: true }` behind Caddy. | Omit when using reverse proxy |
+| **psycopg3 URI** | Use `postgresql+psycopg://` not `postgresql://`. | Use psycopg2 driver string |
+
+---
+
+## 1. Scope-Up Protocol (Pre-Edit Analysis)
+
+**Before ANY edit**, inspect the "Encapsulating Context" to prevent side effects:
+
+### 1.1 Identify the Edit Scope
+
+```
+[Component Level]     → Check parent components, layouts, route groups
+[Module Level]        → Check imports, exports, circular dependencies
+[Service Level]       → Check Docker network, port bindings, env vars
+[Database Level]      → Check FK constraints, Alembic migrations, Prisma schema sync
+```
+
+### 1.2 Mandatory Checks by File Type
+
+| File Pattern | Encapsulating Context to Check |
+|--------------|-------------------------------|
+| `frontend/components/**` | Parent page/layout, Zustand stores, shared props |
+| `frontend/app/**/page.tsx` | `layout.tsx`, `loading.tsx`, `error.tsx`, route params |
+| `frontend/actions/**` | Zod schemas in `types/`, API response contracts |
+| `src/workflow/nodes/**` | `BaseNode` contract, Context type, workflow orchestrator |
+| `src/api/api.py` | Frontend Server Actions, Zod schemas, SSE consumers |
+| `src/database/models.py` | Alembic migrations, Prisma schema, FK relationships |
+| `docker-compose*.yml` | `Caddyfile`, `.env`, `Dockerfile*`, service dependencies |
+| `Caddyfile` | Domain env vars, SSE timeout, service port mappings |
+
+### 1.3 Scope-Up Decision Tree
+
+```
+Is this a leaf component/function with no external dependencies?
+├─ YES → Proceed with caution, verify no implicit contracts
+└─ NO → STOP. Answer these questions first:
+    ├─ What components/modules consume this?
+    ├─ What data flows through this?
+    ├─ What infrastructure depends on this?
+    └─ What tests cover this?
+```
+
+---
+
+## 2. Full-Stack Pre-Flight Checklist
+
+**Before executing any cross-end task**, cross-reference the specialist rules:
+
+### 2.1 Frontend Changes → Check:
+
+- [ ] **@frontend.mdc**: Component patterns, Tailwind v4, shadcn/ui usage
+- [ ] **@backend.mdc**: API contract (Pydantic model ↔ Zod schema)
+- [ ] **@testing.mdc**: No frontend E2E tests yet, but verify TypeScript compiles
+
+### 2.2 Backend Changes → Check:
+
+- [ ] **@backend.mdc**: Node pattern, Context pattern, session management
+- [ ] **@frontend.mdc**: Matching Zod schema in `frontend/types/workflow.ts`
+- [ ] **@testing.mdc**: Run `uv run pytest test/ -v` before apply
+- [ ] **@deployment.mdc**: Docker env vars, Celery worker configuration
+
+### 2.3 Database Changes → Check:
+
+- [ ] **@backend.mdc**: SQLAlchemy model in `src/database/models.py`
+- [ ] **@frontend.mdc**: `npx prisma db pull && npx prisma generate` (NEVER migrate)
+- [ ] **@deployment.mdc**: Migration runs via `docker compose exec api alembic upgrade head`
+- [ ] **@MEMO.md**: Two-user security model (admin vs ui)
+
+### 2.4 Deployment Changes → Check:
+
+- [ ] **@deployment.mdc**: Multi-file compose pattern, Caddy routing
+- [ ] **@MEMO.md**: SSE timeout, BuildKit requirement, port bindings
+- [ ] **@testing.mdc**: Integration tests may need service restarts
+
+---
+
+## 3. Deployment Integrity Rules
+
+**If you modify ANY of these, you MUST verify the deployment stack:**
+
+### 3.1 Port Modifications
+
+```yaml
+# docker-compose.yml ports to track:
+postgres: 5432 (internal), 5433 (prod external via 127.0.0.1)
+redis: 6379
+api: 8000
+frontend: 3000
+flower: 5555
+```
+
+**Verification:**
+1. Check `docker-compose.yml` and `docker-compose.prod.yml` for port mappings
+2. Check `Caddyfile` for reverse_proxy targets
+3. Check `.env.example` for `*_PORT` variables
+
+### 3.2 Environment Variable Modifications
+
+**If adding a new env var:**
+
+1. Add to `.env.example` with comment explaining purpose
+2. Add to `docker-compose.yml` service environment section
+3. Add to `docker-compose.prod.yml` if different in production
+4. Update relevant Dockerfile if needed at build time
+
+**If modifying an existing env var:**
+
+1. Search all files: `Dockerfile*`, `docker-compose*.yml`, `Caddyfile`, `setup.sh`
+2. Verify default values are consistent
+3. Check if frontend needs `NEXT_PUBLIC_` prefix
+
+### 3.3 Dependency Modifications
+
+**Python (`pyproject.toml`):**
+```bash
+uv sync && uv run pytest test/test_profiling_task.py -v
+```
+
+**Node.js (`frontend/package.json`):**
+```bash
+cd frontend && npm install && npm run build
+```
+
+**Docker:**
+- Rebuild images: `docker compose build --no-cache`
+- Test locally before pushing to production
+
+### 3.4 Caddyfile Changes
+
+**Critical settings to preserve:**
+
+```caddyfile
+# SSE requires long timeout
+reverse_proxy api:8000 {
+    transport http {
+        read_timeout 600s  # DO NOT REDUCE
+    }
+}
+```
+
+**Validation checklist:**
+- [ ] Domain placeholders use `{$ENV_VAR}` syntax
+- [ ] Apex domain redirects to frontend domain
+- [ ] Basic auth hash escapes `$` as `$$` in compose
+
+---
+
+## 4. API Contract Verification
+
+### 4.1 Contract Location Map
+
+| Backend (Pydantic) | Frontend (Zod) |
+|--------------------|----------------|
+| `src/workflow/base_context.py` | `frontend/types/workflow.ts` |
+| `src/api/api.py` response models | `frontend/types/workflow.ts` |
+| `src/database/models.py` | `frontend/prisma/schema.prisma` |
+
+### 4.2 Contract Change Protocol
+
+When modifying an API endpoint:
+
+1. **Update Pydantic model** in backend
+2. **Update Zod schema** in `frontend/types/workflow.ts`
+3. **Verify Server Action** in `frontend/actions/` handles new fields
+4. **Test round-trip**: API → Server Action → Component
+
+### 4.3 Naming Convention Bridge
+
+```
+Backend (snake_case)  →  API JSON (snake_case)  →  Frontend (snake_case in Zod)
+                                                    → TypeScript (camelCase internally)
+
+Exception: Better Auth tables use camelCase columns
+```
+
+---
+
+## 5. Definition of Done (DoD)
+
+**You are NOT finished until ALL of these are verified:**
+
+### 5.1 Tests Pass
+
+Per `@testing.mdc`:
+
+```bash
+# Unit tests (always run)
+uv run pytest test/test_profiling_task.py -v
+
+# Integration tests (if API/DB changes)
+uv run pytest test/test_request.py -v  # requires running API
+```
+
+**Loop Breaker:** If a test fails 3 times with the same error, STOP and summarize.
+
+### 5.2 API Contract Verified
+
+- [ ] Pydantic and Zod schemas are in sync
+- [ ] Server Actions handle all response fields
+- [ ] TypeScript builds without errors: `cd frontend && npm run build`
+
+### 5.3 Infrastructure Check
+
+- [ ] `docker compose config` shows no errors
+- [ ] No port conflicts with existing services
+- [ ] Environment variables documented in `.env.example`
+- [ ] Caddyfile syntax valid: `docker compose exec caddy caddy validate`
+
+### 5.4 MEMO.md Updated
+
+If you discovered:
+- A new gotcha or constraint
+- A bug fix that others might revert
+- An architectural decision with rationale
+
+**Add it to `@.cursor/MEMO.md`** in the appropriate section.
+
+---
+
+## 6. Communication Protocol
+
+### 6.1 Impact Analysis (Chain of Thought)
+
+**Before writing ANY code**, print a brief analysis:
+
+```
+## Impact Analysis
+
+**Logic:** [What business logic changes? What code paths affected?]
+**UI:** [What components re-render? What user flows change?]
+**Deployment:** [What services restart? What env vars change?]
+```
+
+### 6.2 Vibe Check (User Confirmation)
+
+**Request explicit approval before:**
+
+- [ ] Database schema changes (migrations)
+- [ ] Docker/Compose configuration changes
+- [ ] Caddyfile routing changes
+- [ ] Environment variable additions/removals
+- [ ] Port binding changes
+- [ ] Auth configuration changes
+
+Example:
+
+```
+⚠️ **Vibe Check Required**
+
+I'm about to modify the database schema by adding a new column to the `user` table.
+
+**Changes:**
+- New migration: `005_add_user_preferences`
+- New column: `preferences JSON`
+
+**Impact:**
+- Requires `alembic upgrade head` on production
+- Prisma schema must be re-pulled
+
+**Proceed?** [y/n]
+```
+
+### 6.3 Log Dump Before Fix
+
+Per `@testing.mdc`, when a test or runtime error occurs:
+
+1. Read Docker logs: `docker compose logs --tail=50 api celery-worker`
+2. Read full pytest traceback
+3. Check database state if relevant
+
+**Do NOT attempt a fix without first reading logs.**
+
+---
+
+## 7. Cross-End Task Templates
+
+### 7.1 Adding a New Workflow Node
+
+```
+1. Create node in src/workflow/nodes/{name}_node.py
+2. Extend BaseNode, implement _execute()
+3. Update workflow orchestrator to include node
+4. Add node to publish_run_status() calls
+5. Update frontend Progress Stepper if UI needed
+6. Add/update tests
+7. Run: uv run pytest test/ -v
+8. Update MEMO.md if new pattern discovered
+```
+
+### 7.2 Adding a New API Endpoint
+
+```
+1. Add Pydantic request/response models
+2. Add endpoint in src/api/api.py
+3. Add corresponding Zod schemas in frontend/types/
+4. Create Server Action in frontend/actions/
+5. Wire up UI component to call Server Action
+6. Test: curl + frontend integration
+7. Document in API section of index.mdc
+```
+
+### 7.3 Adding a New Database Table
+
+```
+1. Add SQLAlchemy model in src/database/models.py
+2. Export in src/database/__init__.py
+3. Create Alembic migration: alembic revision --autogenerate
+4. Review migration, adjust if needed
+5. Run migration: docker compose exec api alembic upgrade head
+6. Sync Prisma: cd frontend && npx prisma db pull && npx prisma generate
+7. Grant permissions to job_agent_ui if needed
+8. Add to repository helpers if CRUD needed
+```
+
+### 7.4 Modifying Deployment Configuration
+
+```
+1. Identify all affected files (compose, Caddy, Dockerfile, .env)
+2. Print Impact Analysis
+3. Request Vibe Check from user
+4. Make changes with clear comments
+5. Test locally: docker compose up --build
+6. Verify health checks pass
+7. Document changes in deployment.mdc if pattern
+8. Update MEMO.md with any gotchas discovered
+```
+
+---
+
+## 8. Emergency Protocols
+
+### 8.1 Production is Down
+
+```bash
+# 1. Check service status
+docker compose -f docker-compose.yml -f docker-compose.prod.yml ps
+
+# 2. Check logs for errors
+docker compose logs --tail=100 api celery-worker frontend caddy
+
+# 3. Check if database is reachable
+docker compose exec postgres pg_isready
+
+# 4. Check if Redis is reachable
+docker compose exec redis redis-cli ping
+
+# 5. Restart specific service
+docker compose restart api
+
+# 6. Nuclear option: restart everything
+docker compose down && docker compose up -d
+```
+
+### 8.2 Database Migration Failed
+
+```bash
+# 1. Check current migration state
+docker compose exec api alembic current
+
+# 2. View migration history
+docker compose exec api alembic history
+
+# 3. Rollback one step (if safe)
+docker compose exec api alembic downgrade -1
+
+# 4. Fix migration script and retry
+docker compose exec api alembic upgrade head
+```
+
+### 8.3 Event Loop Errors in Celery
+
+**Symptoms:** "Event loop is closed" in worker logs
+
+**Fix:** Verify `src/tasks/worker_lifecycle.py` is imported in `celery_app.py`:
+
+```python
+# src/celery_app.py
+import src.tasks.worker_lifecycle  # noqa: F401 - Registers signals
+```
+
+**All tasks MUST use:**
+```python
+from src.tasks.worker_lifecycle import run_in_worker_loop
+result = run_in_worker_loop(async_function())
+```
+
+---
+
+## 9. Quick Reference
+
+### File Ownership
+
+| Domain | Owner Rule | Primary Files |
+|--------|------------|---------------|
+| Frontend UI | `@frontend.mdc` | `frontend/**` |
+| Backend API | `@backend.mdc` | `src/**` |
+| Testing | `@testing.mdc` | `test/**` |
+| Deployment | `@deployment.mdc` | `Dockerfile*`, `docker-compose*`, `Caddyfile` |
+| Memory | `@MEMO.md` | Hard-won lessons |
+| Orchestration | `@master.mdc` (this file) | Cross-end coordination |
+
+### Common Commands
+
+```bash
+# Start development
+./start.sh
+
+# Run backend tests
+uv run pytest test/ -v
+
+# Build frontend
+cd frontend && npm run build
+
+# Database migration
+docker compose exec api alembic upgrade head
+
+# Prisma sync (frontend)
+cd frontend && npx prisma db pull && npx prisma generate
+
+# View logs
+docker compose logs -f api celery-worker
+
+# Check service health
+docker compose ps
+```
+
+---
+
+## 10. Safety Mantras
+
+1. **"Check the MEMO first"** — Institutional memory beats training data.
+2. **"Scope up before diving in"** — Understand the container before changing the contents.
+3. **"Contracts bind both ends"** — API changes require frontend updates.
+4. **"Infrastructure is fragile"** — Always verify compose and Caddy after changes.
+5. **"Tests are your safety net"** — Never skip them, especially after refactors.
+6. **"Document what hurt"** — Update MEMO.md with new lessons.
+7. **"Vibe check the risky stuff"** — Get user approval for deployment changes.
+
+---
+
+*This rule is the project's executive function. When in doubt, consult this file first, then defer to specialist rules.*

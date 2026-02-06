@@ -1,0 +1,374 @@
+---
+description: Autonomous testing guidelines - run tests before applying changes
+globs: test/**/*.py, src/**/*.py, frontend/**/*.ts, frontend/**/*.tsx, pyproject.toml, frontend/package.json
+alwaysApply: true
+---
+
+# Testing Rules
+
+This rule enforces testing discipline for the Job Agent application. **You MUST run relevant tests and show green output before asking to apply any major code changes.**
+
+## Loop Breaker Rule
+
+**CRITICAL: If a test fails 3 times in a row with the same error, STOP immediately.**
+
+Do not keep guessing or making speculative fixes. Instead:
+
+1. **STOP all fix attempts**
+2. **Summarize the failure** to the user with:
+   - The exact error message
+   - What you tried (all 3 attempts)
+   - Why each attempt failed
+   - Your hypothesis about the root cause
+3. **Ask for guidance** before proceeding
+
+Example summary format:
+
+```
+## Test Failure Summary (3 consecutive failures)
+
+**Error:** `AssertionError: expected 5, got None`
+
+**Attempts:**
+1. Added null check → Same error (value never set)
+2. Changed default value → Same error (override ignored)  
+3. Fixed initialization order → Same error (still None)
+
+**Hypothesis:** The value is being set asynchronously and the test 
+runs before the callback completes. This may require mocking the 
+async behavior or adding a wait condition.
+
+**Recommendation:** Should I investigate the async timing, or would 
+you like to provide more context about how this value should be set?
+```
+
+## Log Dump Rule
+
+**When a test fails, you MUST read application logs before attempting any fix.**
+
+Before making changes to fix a failing test:
+
+1. **Check Docker container logs** (if services are running):
+   ```bash
+   # API logs
+   docker compose logs --tail=50 api
+   
+   # Celery worker logs
+   docker compose logs --tail=50 celery-worker
+   
+   # All service logs
+   docker compose logs --tail=50
+   ```
+
+2. **Check pytest output carefully** - Read the full traceback, not just the assertion
+
+3. **Check database state** if relevant:
+   ```bash
+   # Quick check for recent runs
+   docker compose exec postgres psql -U postgres -d job_agent -c "SELECT id, status, error_message FROM runs ORDER BY created_at DESC LIMIT 5;"
+   ```
+
+**Log locations:**
+- Docker services: `docker compose logs [service]`
+- Pytest output: Shown in terminal (use `-v -s` for verbose)
+- Application errors: Check Sentry if configured (`SENTRY_DSN` in .env)
+
+**Do NOT attempt a fix without first reading logs.** The root cause is often visible in the logs but not in the test assertion.
+
+## Test Commands
+
+### Backend Tests (Python/pytest)
+
+```bash
+# Run all backend tests
+uv run pytest test/ -v
+
+# Run specific test file
+uv run pytest test/test_profiling_task.py -v
+
+# Run specific test function
+uv run pytest test/test_profiling_task.py::test_profiling_task_module_imports -v
+
+# Run with verbose output and show print statements
+uv run pytest test/ -v -s
+
+# Run only fast unit tests (no external dependencies)
+uv run pytest test/test_profiling_task.py -v
+```
+
+### API Integration Tests
+
+```bash
+# Health check only (requires API running)
+uv run pytest test/test_request.py::test_health_check -v
+
+# Interactive test runner (manual testing)
+uv run python test/test_request.py
+```
+
+### Workflow Integration Tests
+
+```bash
+# Interactive workflow tests (manual, requires all services)
+uv run python test/test_workflow.py
+
+# Run specific workflow test via CLI
+uv run python test/test_workflow.py --test discovery
+uv run python test/test_workflow.py --test profiling
+uv run python test/test_workflow.py --test matching
+```
+
+### Frontend (Currently No E2E Tests)
+
+The frontend does not currently have a testing framework configured. When E2E tests are added:
+
+```bash
+# Future: Playwright E2E tests
+cd frontend && npm run test:e2e
+```
+
+## NEVER List
+
+You must NEVER:
+
+1. **NEVER delete or modify production test data** - Tests run against a real PostgreSQL database. Do not truncate tables or delete records unless explicitly creating test cleanup logic.
+
+2. **NEVER run the DeliveryNode test without user confirmation** - The `test_delivery_node()` function sends actual emails via Nylas. Always warn the user before running delivery-related tests.
+
+3. **NEVER commit tests with hardcoded credentials** - Use environment variables from `.env`. Tests already use `load_dotenv()` to load secrets.
+
+4. **NEVER skip the `asyncio_mode = "auto"` configuration** - Async tests require this setting in `pyproject.toml`. Do not remove or modify it.
+
+5. **NEVER run tests that call external APIs (SerpAPI, Gemini, Nylas) in CI without mocking** - These tests are for local integration testing and will incur costs.
+
+6. **NEVER create test users with real email addresses** - Use `test@example.com` or similar placeholder emails for test data.
+
+7. **NEVER leave test runs in the database without cleanup** - When writing new tests that create `Run` records, implement cleanup or use unique identifiers.
+
+8. **NEVER modify the `db_session()` generator behavior** - Tests rely on the commit/rollback pattern. Changes could corrupt test data or cause transaction leaks.
+
+9. **NEVER run parallel tests that share database state** - The current test suite is not designed for parallel execution with shared database records.
+
+10. **NEVER bypass API key validation in tests** - Even test endpoints must use `X-API-Key` header or `JOB_LAND_API_KEY` from environment.
+
+## Pre-Apply Testing Requirement
+
+**CRITICAL: Before asking to apply any major code change, you MUST:**
+
+1. **Identify affected tests** - Determine which test files cover the code being modified.
+
+2. **Run the relevant tests** - Execute the appropriate pytest command(s).
+
+3. **Show green output** - Display the test results showing all tests passed.
+
+4. **If tests fail** - Fix the issue before proceeding. Do not ask to apply changes with failing tests.
+
+### What Counts as "Major Code Changes"
+
+Major changes that require pre-apply testing:
+
+- Any modification to files in `src/workflow/` (nodes, contexts, workflows)
+- Any modification to `src/database/` (models, session, repository)
+- Any modification to `src/api/api.py` (endpoints)
+- Any modification to `src/tasks/` (Celery tasks)
+- Adding or modifying Pydantic models
+- Changes to authentication or authorization logic
+- Database schema changes (Alembic migrations)
+- **Any changes to `pyproject.toml`** (Python dependencies, pytest config)
+- **Any changes to `frontend/package.json`** (Node.js dependencies)
+
+### Dependency Change Protocol
+
+When modifying `pyproject.toml` or `frontend/package.json`:
+
+1. **After adding/removing Python dependencies:**
+   ```bash
+   # Sync dependencies
+   uv sync
+   
+   # Run unit tests to verify imports still work
+   uv run pytest test/test_profiling_task.py -v
+   ```
+
+2. **After adding/removing Node.js dependencies:**
+   ```bash
+   cd frontend && npm install
+   
+   # Verify build still works
+   npm run build
+   ```
+
+3. **If pytest config changes** (in `pyproject.toml`):
+   ```bash
+   # Run all tests to verify config is valid
+   uv run pytest test/ -v
+   ```
+
+### Example Workflow
+
+When modifying `src/workflow/nodes/discovery_node.py`:
+
+```
+1. Identify test: test/test_workflow.py covers discovery
+2. Run: uv run pytest test/test_profiling_task.py -v (fast unit test first)
+3. Show output: "✓ 2 passed in 0.5s"
+4. Then ask: "Tests pass. Ready to apply the changes?"
+```
+
+## Test Structure
+
+### Current Test Files
+
+```
+test/
+├── __init__.py
+├── test_profiling_task.py   # Unit tests - fast, no external deps
+├── test_request.py          # API integration tests - requires running API
+└── test_workflow.py         # Workflow integration - requires all services
+```
+
+### Test Categories
+
+| Test File | Type | External Deps | Safe to Run |
+|-----------|------|---------------|-------------|
+| `test_profiling_task.py` | Unit | None | Always |
+| `test_request.py` | Integration | API Server | When API running |
+| `test_workflow.py` | Integration | DB, Redis, APIs | Manual only |
+
+## Database in Tests
+
+Tests use the **real PostgreSQL database** configured via environment variables. There is no mock database.
+
+### Session Pattern in Tests
+
+```python
+from src.database import db_session, Run, MatchedJob
+
+# Get a session
+session = next(db_session())
+try:
+    # Query or create test data
+    run = Run(status="processing")
+    session.add(run)
+    session.commit()
+    session.refresh(run)
+finally:
+    session.close()
+```
+
+### Environment for Tests
+
+Tests load `.env` from project root. Required variables:
+
+```bash
+POSTGRES_HOST=localhost      # Use localhost for tests on host machine
+POSTGRES_PORT=5432
+POSTGRES_DB=job_agent
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=...
+JOB_LAND_API_KEY=...         # Required for API tests
+```
+
+## Writing New Tests
+
+### Unit Test Pattern
+
+```python
+"""Unit tests for [module name]."""
+
+import pytest
+
+def test_module_imports():
+    """Verify module imports without errors."""
+    from src.module import function
+    assert callable(function)
+
+def test_function_behavior():
+    """Test specific function behavior."""
+    from src.module import function
+    result = function(input)
+    assert result == expected
+```
+
+### Async Test Pattern
+
+```python
+"""Async tests for workflow nodes."""
+
+import pytest
+
+async def test_node_execution():
+    """Test async node execution."""
+    from src.workflow.nodes.my_node import MyNode
+    
+    node = MyNode()
+    context = MyContext(...)
+    result = await node.run(context)
+    
+    assert not result.has_errors()
+    assert result.some_field == expected
+```
+
+### Integration Test Pattern
+
+```python
+"""Integration tests requiring running services."""
+
+import pytest
+from src.database import db_session, Run
+
+def test_with_database():
+    """Test with real database."""
+    session = next(db_session())
+    try:
+        # Test logic
+        run = session.query(Run).first()
+        assert run is not None
+    finally:
+        session.close()
+```
+
+## CI/CD Considerations
+
+When adding CI/CD testing:
+
+1. **Unit tests only in CI** - Run `test_profiling_task.py` which has no external dependencies
+2. **Mock external services** - Create fixtures for SerpAPI, Gemini, Nylas responses
+3. **Use test database** - Configure a separate test database in CI environment
+4. **Skip delivery tests** - Always skip email delivery tests in automated runs
+
+```bash
+# CI-safe test command
+uv run pytest test/test_profiling_task.py -v --tb=short
+```
+
+## Troubleshooting
+
+### "Connection refused" errors
+
+```bash
+# Ensure Docker services are running
+docker compose up -d postgres redis
+
+# Check if API is running for integration tests
+curl http://localhost:8000/health
+```
+
+### "API key missing" errors
+
+```bash
+# Ensure .env is loaded
+source .env
+# Or run with dotenv
+uv run pytest test/test_request.py -v
+```
+
+### Async test failures
+
+Ensure `pyproject.toml` has:
+
+```toml
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["test"]
+```
