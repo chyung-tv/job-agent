@@ -212,9 +212,10 @@ The `postgres` superuser is created automatically by the postgres Docker image a
 | File | Change | Status |
 |------|--------|--------|
 | `scripts/grant-two-users-existing-db.sql` | Use `set_config`/`current_setting` for psql vars; fixed `set_config(..., false)` for session-level persistence | Applied |
-| `setup.sh` | Replaced `reset_db.py` with direct psql as postgres superuser; fixed step ordering | Applied |
+| `setup.sh` | Replaced `reset_db.py` with direct psql as postgres superuser; fixed step ordering; added `--no-cache` API build before migrations (Issue 5) | Applied |
 | `src/database/run_migrations.py` | NEW: Robust Alembic migration runner using programmatic API | Applied |
 | `frontend/public/.gitkeep` | NEW: Ensures public directory exists for Docker build | Applied |
+| `Dockerfile` | Added verification step after `uv pip install` to fail fast if alembic/celery/fastapi missing (Issue 5) | Applied |
 
 ## Deployment Sequence
 
@@ -229,3 +230,104 @@ Once all fixes are committed and pushed to VPS:
 ```
 
 The `--first-time` flag now handles all scenarios (fresh DB, dirty volume, existing users) by using postgres superuser for schema reset before creating application users.
+
+---
+
+## Issue 5: Alembic Missing in Production Multi-Stage Docker Build
+
+### Symptom
+
+```
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/app/src/database/run_migrations.py", line 20, in <module>
+    from alembic.config import Config
+ModuleNotFoundError: No module named 'alembic.config'
+```
+
+This error occurs during step 5 of first-time setup when running migrations in production mode:
+```bash
+$COMPOSE_RUN_API python -m src.database.run_migrations
+```
+
+### Root Cause Analysis
+
+**Why it works locally (dev mode) but fails on server (prod mode):**
+
+| Aspect | Local (dev mode) | Server (prod mode) |
+|--------|------------------|---------------------|
+| Compose files | `docker-compose.yml` only | `docker-compose.yml` + `docker-compose.prod.yml` |
+| Dockerfile | `Dockerfile.dev` (single-stage) | `Dockerfile` (multi-stage) |
+| Build process | Direct install in runtime image | Install in builder, COPY to runtime |
+| Source volumes | Mounts `./src`, `./alembic`, etc. | `volumes: []` (no mounts) |
+
+The production `Dockerfile` uses a multi-stage build:
+
+```dockerfile
+# Stage 1: Builder
+FROM python:3.13-slim as builder
+COPY pyproject.toml uv.lock* ./
+RUN pip install uv && uv pip install --system .
+
+# Stage 2: Runtime
+FROM python:3.13-slim
+COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+```
+
+**Three possible causes:**
+
+1. **Stale cached image on VPS** - The VPS has a cached Docker image from before `alembic>=1.14.0` was added to `pyproject.toml`. The `docker compose run --rm api` command reuses the cached image instead of rebuilding.
+
+2. **uv installs to unexpected location** - `uv pip install --system .` may install packages to a different path than `/usr/local/lib/python3.13/site-packages` in some environments (e.g., different Python minor version, different base image).
+
+3. **Missing `uv.lock` on VPS** - The `COPY pyproject.toml uv.lock* ./` uses a wildcard; if `uv.lock` is missing on VPS, `uv pip install` behavior may differ from local.
+
+### Why Local Dev Works
+
+In development mode, `docker-compose.yml` uses `Dockerfile.dev` which is a **single-stage build**:
+- Packages are installed directly into the runtime image (no COPY between stages)
+- No risk of path mismatches or missing files
+- Image is frequently rebuilt locally during development
+
+### Fix Applied
+
+**File:** `Dockerfile` - Added verification step after `uv pip install`:
+
+```dockerfile
+# Verify critical packages are installed (fail fast if missing)
+RUN python -c "from alembic.config import Config; print('alembic OK')"
+```
+
+This ensures the Docker build fails immediately if alembic isn't properly installed, rather than failing later at runtime during migrations.
+
+**File:** `setup.sh` - Added `--no-cache` build before migrations in `action_first_time()`:
+
+```bash
+echo "5. Building API image (--no-cache to ensure fresh dependencies)..."
+$COMPOSE_BASE build --no-cache api
+
+echo "6. Running migrations (creating tables)..."
+$COMPOSE_RUN_API python -m src.database.run_migrations
+```
+
+This forces a fresh build of the API image before running migrations, ensuring no stale cached layers are used.
+
+### Verification
+
+After applying fixes, verify on server:
+
+```bash
+# 1. Force rebuild to verify Dockerfile fix
+docker compose -f docker-compose.yml -f docker-compose.prod.yml build --no-cache api
+
+# 2. Verify alembic is accessible
+docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm api \
+  python -c "from alembic.config import Config; print('alembic OK')"
+
+# 3. Run first-time setup
+./setup.sh --first-time --prod
+```
+
+**Status:** Fix applied, needs testing on VPS.

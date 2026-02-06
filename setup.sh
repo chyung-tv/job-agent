@@ -125,22 +125,30 @@ action_first_time() {
     exit 1
   fi
   
-  echo "5. Running migrations (creating tables)..."
+  echo "5. Building API image (--no-cache to ensure fresh dependencies)..."
+  # Force rebuild to avoid stale cached images missing alembic or other packages
+  # See DEBUG_LOG.md Issue 5 for details on multi-stage build issues
+  if ! $COMPOSE_BASE build --no-cache api; then
+    echo "Error: Failed to build API image. Check Dockerfile and pyproject.toml."
+    exit 1
+  fi
+  
+  echo "6. Running migrations (creating tables)..."
   $COMPOSE_RUN_API python -m src.database.run_migrations
   
-  echo "6. Granting Better Auth permissions to UI account..."
+  echo "7. Granting Better Auth permissions to UI account..."
   if ! cat scripts/grant-better-auth-permissions.sql | $COMPOSE_BASE exec -T postgres \
     psql -v ON_ERROR_STOP=1 -U postgres -d "${POSTGRES_DB:-job_agent}" -f -; then
     echo "Warning: Failed to grant Better Auth permissions. You may need to run this manually."
   fi
   
-  echo "7. Granting frontend read permissions on backend tables..."
+  echo "8. Granting frontend read permissions on backend tables..."
   grant_frontend_permissions
   
-  echo "8. Syncing Prisma schema..."
+  echo "9. Syncing Prisma schema..."
   sync_prisma
   
-  echo "9. Starting all services..."
+  echo "10. Starting all services..."
   $COMPOSE_BASE up -d --build
   
   echo "=== Setup complete! ==="

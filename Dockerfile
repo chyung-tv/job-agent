@@ -12,6 +12,12 @@ RUN apt-get update && apt-get install -y \
 COPY pyproject.toml uv.lock* ./
 RUN pip install --upgrade pip && pip install uv && uv pip install --system .
 
+# Verify critical packages are installed (fail fast if missing)
+# This catches multi-stage build issues before runtime
+RUN python -c "from alembic.config import Config; print('alembic OK')" && \
+    python -c "import celery; print('celery OK')" && \
+    python -c "import fastapi; print('fastapi OK')"
+
 # Stage 2: Runtime stage
 FROM python:3.13-slim
 
