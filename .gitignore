@@ -11,3 +11,18 @@ wheels/
 
 # Environment variables
 .env
+
+# Frontend build artifacts
+frontend/.next/
+frontend/node_modules/
+frontend/.vercel/
+frontend/*.tsbuildinfo
+frontend/next-env.d.ts
+
+# OS files
+.DS_Store
+
+# IDE
+.idea/
+*.swp
+*.swo
