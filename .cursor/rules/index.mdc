@@ -264,23 +264,24 @@ matched_jobs
 
 <!-- Update this section to track current development focus -->
 
-**Current Sprint:** Production Deployment Fixes
+**Current Sprint:** Feature Development
 
-**Active Debug Log:** [.cursor/DEBUG_LOG.md](../.cursor/DEBUG_LOG.md)
-
-**In Progress:**
-- [ ] Fix Alembic migration execution in production container
-- [ ] Fix frontend Docker build (missing `public/` folder)
-- [ ] Fix psql variable interpolation in user creation script
+**Status:** ✅ Production deployment complete (2026-02-06)
 
 **Recently Completed:**
+- [x] Production deployment on Hetzner VPS
+- [x] Fix Alembic migration execution in production container
+- [x] Fix frontend Docker build (missing `public/` folder)
+- [x] Fix psql variable interpolation in user creation script
+- [x] Fix NEXT_PUBLIC_* environment variables (build-time args)
 - [x] Beta access control (`hasAccess` field)
 - [x] User scoping for all entities
 - [x] Workflow status SSE streaming
 
 **Known Issues:**
 - Job postings may accumulate; consider deduplication strategy
-- **BLOCKING:** Production deployment blocked by Alembic + Docker issues (see DEBUG_LOG.md)
+
+**Deployment Lessons Learned:** See [MEMO.md](../MEMO.md) for critical lessons from production deployment (Lessons 4-7).
 
 ---
 

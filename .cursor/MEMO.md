@@ -281,6 +281,8 @@ export const auth = betterAuth({
 | **Container restart** | Use `restart: unless-stopped` for all services |
 | **Multi-stage build cache** | `docker compose run` may use stale cached images; use `--no-cache` for first-time setup |
 | **Verify packages in Dockerfile** | Add `RUN python -c "import pkg; print('OK')"` after install to fail fast if packages missing |
+| **Frontend public/ directory** | Multi-stage `COPY --from=builder` fails silently if source doesn't exist; add `frontend/public/.gitkeep` |
+| **NEXT_PUBLIC_* in Docker** | Must be ARG/ENV at build time, not runtime environment; see Lesson 7 |
 
 ### 3.2 Database
 
@@ -428,6 +430,141 @@ Multi-stage Docker builds copy packages from builder to runtime stage. If the im
 
 ---
 
+### Lesson 5: psql Variable Interpolation in PL/pgSQL Blocks
+
+> **psql cannot interpolate `:variable` syntax inside dollar-quoted blocks.**
+
+When writing SQL scripts that use psql variables (`:variable`) inside `DO $$ ... $$ BEGIN ... END;` blocks, the variables won't be interpolated — they're treated as literal text.
+
+**Broken pattern:**
+```sql
+\set admin_pass 'mypassword'
+DO $$
+BEGIN
+  EXECUTE format('CREATE USER job_agent_admin WITH PASSWORD %L', :'admin_pass');
+END $$;
+-- ERROR: syntax error at or near ":"
+```
+
+**Working pattern:** Use session config as an intermediary:
+```sql
+\set admin_pass 'mypassword'
+SELECT set_config('var.admin_pass', :'admin_pass', false);  -- false = session-level
+
+DO $$
+DECLARE
+  v_admin_pass text := current_setting('var.admin_pass');
+BEGIN
+  EXECUTE format('CREATE USER job_agent_admin WITH PASSWORD %L', v_admin_pass);
+END $$;
+```
+
+**Key details:**
+- `set_config(name, value, is_local)` — Use `false` for session-level persistence (survives the SELECT statement)
+- `current_setting('var.name')` — Reads the value inside PL/pgSQL
+- Prefix with `var.` to avoid conflicts with real PostgreSQL settings
+
+**Files affected:** `scripts/grant-two-users-existing-db.sql`
+
+**Impact:** Database user creation scripts would fail with cryptic syntax errors.
+
+---
+
+### Lesson 6: Bootstrap Ordering (Chicken-and-Egg Problem)
+
+> **First-time setup must use always-available credentials, not application users.**
+
+When scripting first-time database setup, don't assume application users exist. The postgres Docker image always creates a superuser (default: `postgres`), but application users must be explicitly created.
+
+**Broken ordering:**
+```bash
+# Step 3: Drop schema (connects as job_agent_admin)
+docker compose exec api python -m src.database.reset_db  # FAILS - user doesn't exist
+
+# Step 4: Create users
+psql -f create-users.sql  # Creates job_agent_admin
+```
+
+**Working ordering:**
+```bash
+# Step 3: Drop schema (as postgres superuser - always exists)
+docker compose exec postgres psql -U postgres -d job_agent -c "
+  DROP SCHEMA IF EXISTS public CASCADE;
+  CREATE SCHEMA public;
+  GRANT ALL ON SCHEMA public TO public;
+"
+
+# Step 4: Create application users
+psql -f create-users.sql
+```
+
+**Key insight:** The `postgres` superuser is created automatically by the postgres Docker image. By using `psql` directly in the postgres container instead of going through the API container, you avoid the dependency on application users.
+
+**Scenario matrix:**
+| Scenario | Old Behavior | New Behavior |
+|----------|--------------|--------------|
+| Fresh DB, no volume | Fails (no job_agent_admin) | Works (postgres superuser) |
+| Dirty DB from failed attempt | Fails (user may not exist) | Works (resets as superuser) |
+| Existing DB with correct users | Works | Works |
+
+**Files affected:** `setup.sh` (`action_first_time()` function)
+
+**Impact:** Without this, first-time setup would fail on fresh VPS or after Docker volume cleanup.
+
+---
+
+### Lesson 7: NEXT_PUBLIC_* Variables Must Be Build-Time Arguments
+
+> **Next.js `NEXT_PUBLIC_*` environment variables are inlined into JavaScript at BUILD TIME, not read at runtime.**
+
+In Docker deployments, setting `NEXT_PUBLIC_*` as runtime environment variables in `docker-compose.yml` does NOT work. These variables must be available when `npm run build` runs.
+
+**Broken pattern (runtime env):**
+```yaml
+# docker-compose.prod.yml
+frontend:
+  environment:
+    NEXT_PUBLIC_API_URL: https://api.example.com  # ❌ Too late - build already happened
+```
+
+**Working pattern (build args):**
+```dockerfile
+# Dockerfile.frontend
+ARG NEXT_PUBLIC_API_URL=http://localhost:8000
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+# ... later ...
+RUN npm run build  # Variables are now baked into JS bundle
+```
+
+```yaml
+# docker-compose.prod.yml
+frontend:
+  build:
+    args:
+      NEXT_PUBLIC_API_URL: https://api.example.com  # ✅ Available at build time
+```
+
+**How Next.js handles environment variables:**
+| Variable Type | When Available | How It Works |
+|---------------|----------------|--------------|
+| `NEXT_PUBLIC_*` | Build time | Text-replaced into JS bundle during `npm run build` |
+| Server-only env | Runtime | Read via `process.env` in server components/API routes |
+
+**Verification:**
+```bash
+# Check if localhost is baked into the JS bundle (bad)
+docker compose exec frontend sh -c "grep -r 'localhost:3000' .next/static/ || echo 'Clean (good)'"
+```
+
+**Files affected:**
+- `Dockerfile.frontend` (ARG/ENV declarations)
+- `docker-compose.prod.yml` (build args instead of environment)
+- `setup.sh` (`--no-cache` rebuild for frontend)
+
+**Impact:** Without this, auth and API calls would go to `localhost:3000` instead of production URLs, causing CORS errors and authentication failures.
+
+---
+
 ## Appendix: Quick Reference Commands
 
 ```bash
@@ -455,5 +592,5 @@ uv run pytest test/ -v
 
 ---
 
-*Last updated: 2026-02-06 (Added Lesson 4: Multi-Stage Docker Builds)*
+*Last updated: 2026-02-06 (Added Lessons 5-7 from production deployment)*
 *Maintained by: Development Team*
